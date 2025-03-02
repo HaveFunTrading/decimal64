@@ -2,5 +2,9 @@
 name = "decimal64"
 version = "0.1.0"
 edition = "2021"
+description = "TBC"
+readme = "./README.md"
+documentation = "https://docs.rs/decimal64"
+repository = "https://github.com/HaveFunTrading/decimal64"
 
 [dependencies]
