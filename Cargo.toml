@@ -7,5 +7,6 @@ description = "TBC"
 readme = "./README.md"
 documentation = "https://docs.rs/decimal64"
 repository = "https://github.com/HaveFunTrading/decimal64"
+rust-version = "1.84.1"
 
 [dependencies]
