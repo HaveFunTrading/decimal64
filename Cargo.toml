@@ -9,4 +9,29 @@ documentation = "https://docs.rs/decimal64"
 repository = "https://github.com/HaveFunTrading/decimal64"
 rust-version = "1.84.1"
 
+[features]
+default = []
+serde = ["dep:serde"]
+
 [dependencies]
+thiserror = "2.0.12"
+serde = { version = "1.0.217", features = ["derive"],  optional = true }
+
+[dev-dependencies]
+anyhow = "1.0.97"
+criterion = "0.5.1"
+rust_decimal = "1.36.0"
+rstest = "0.25.0"
+rstest_macros = "0.25.0"
+serde_json = "1.0.140"
+
+[[bench]]
+name = "parse"
+path = "benches/parse.rs"
+harness = false
+
+[[bench]]
+name = "mul"
+path = "benches/mul.rs"
+harness = false
+
