@@ -1,4 +1,4 @@
-use decimal::{DecimalU64, U8};
+use decimal64::{DecimalU64, U8};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::fs::File;

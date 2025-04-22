@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use decimal::{DecimalU64, U3, U8};
+use decimal64::{DecimalU64, U3, U8};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
