@@ -122,7 +122,7 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     /// ```no_run
     ///
     /// use std::str::FromStr;
-    /// use decimal::{DecimalU64, U6};
+    /// use decimal64::{DecimalU64, U6};
     ///
     /// let (int_part, frac_part) = DecimalU64::<U6>::from_str("123.45").unwrap().split();
     /// assert_eq!(123, int_part);
