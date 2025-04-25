@@ -1,13 +1,13 @@
 [package]
 name = "decimal64"
-version = "0.0.3"
+version = "0.0.4"
 edition = "2021"
 license = "MIT"
 description = "TBC"
 readme = "./README.md"
 documentation = "https://docs.rs/decimal64"
 repository = "https://github.com/HaveFunTrading/decimal64"
-rust-version = "1.84.1"
+rust-version = "1.84.0"
 
 [features]
 default = []
