@@ -13,17 +13,18 @@ pub mod serde;
 pub trait ScaleMetrics {
     const SCALE: u8;
     const SCALE_FACTOR: u64;
+    const REQUIRED_BUFFER_LEN: usize;
 }
 
-gen_scale!(U0, 0);
-gen_scale!(U1, 1);
-gen_scale!(U2, 2);
-gen_scale!(U3, 3);
-gen_scale!(U4, 4);
-gen_scale!(U5, 5);
-gen_scale!(U6, 6);
-gen_scale!(U7, 7);
-gen_scale!(U8, 8);
+gen_scale!(U0, 0, 20);
+gen_scale!(U1, 1, 21);
+gen_scale!(U2, 2, 21);
+gen_scale!(U3, 3, 21);
+gen_scale!(U4, 4, 21);
+gen_scale!(U5, 5, 21);
+gen_scale!(U6, 6, 21);
+gen_scale!(U7, 7, 21);
+gen_scale!(U8, 8, 21);
 
 const SCALE_FACTORS: [u64; 9] = [1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000];
 
@@ -137,13 +138,27 @@ impl<S: ScaleMetrics> DecimalU64<S> {
 
     #[inline]
     pub fn write_to(&self, buffer: &mut [u8]) -> usize {
+        #[cold]
+        #[inline(never)]
+        fn insufficient_buffer_len(len: usize, required: usize) -> ! {
+            panic!("provided buffer length {} is too small, requires at least {} bytes", len, required);
+        }
+
+        // ensure the provided buffer has enough length to write the max value
+        if S::REQUIRED_BUFFER_LEN > buffer.len() {
+            insufficient_buffer_len(buffer.len(), S::REQUIRED_BUFFER_LEN)
+        }
+
         // Compute the scale factor: 10^PRECISION.
         let (int_part, frac_part) = self.split();
         let mut pos = 0;
 
         // Write the integer part.
         if int_part == 0 {
-            buffer[pos] = b'0';
+            // SAFETY we already checked the destination buffer is of sufficient size
+            unsafe {
+                *buffer.get_unchecked_mut(pos) = b'0';
+            }
             pos += 1;
         } else {
             let mut tmp = int_part;
@@ -157,21 +172,30 @@ impl<S: ScaleMetrics> DecimalU64<S> {
             tmp = int_part;
             while tmp != 0 {
                 idx -= 1;
-                buffer[idx] = b'0' + (tmp % 10) as u8;
+                // SAFETY we already checked the destination buffer is of sufficient size
+                unsafe {
+                    *buffer.get_unchecked_mut(idx) = b'0' + (tmp % 10) as u8;
+                }
                 tmp /= 10;
             }
         }
 
         // If there is a fractional part, write the decimal point and fractional digits.
         if S::SCALE > 0 {
-            buffer[pos] = b'.';
+            // SAFETY we already checked the destination buffer is of sufficient size
+            unsafe {
+                *buffer.get_unchecked_mut(pos) = b'.';
+            }
             pos += 1;
             // Start with the highest power of 10 for the fractional part.
             let mut divisor = 10u64.pow((S::SCALE - 1) as u32);
             let mut frac = frac_part;
             for _ in 0..S::SCALE {
                 let digit = frac / divisor;
-                buffer[pos] = b'0' + (digit as u8);
+                // SAFETY we already checked the destination buffer is of sufficient size
+                unsafe {
+                    *buffer.get_unchecked_mut(pos) = b'0' + (digit as u8);
+                }
                 pos += 1;
                 frac %= divisor;
                 divisor /= 10;
@@ -384,5 +408,37 @@ mod tests {
         assert_eq!("184467440737095516.15", DecimalU64::<U2>::MAX.to_string());
         assert_eq!("1844674407370955161.5", DecimalU64::<U1>::MAX.to_string());
         assert_eq!("18446744073709551615", DecimalU64::<U0>::MAX.to_string());
+    }
+
+    #[test]
+    fn should_write_max_to_buffer() {
+        fn write_max<S: ScaleMetrics>(buffer: &mut [u8], value: DecimalU64<S>) -> usize {
+            value.write_to(buffer)
+        }
+
+        let mut buffer = [0u8; 1024];
+
+        assert_eq!(21, write_max(&mut buffer, DecimalU64::<U8>::MAX));
+        assert_eq!(21, write_max(&mut buffer, DecimalU64::<U7>::MAX));
+        assert_eq!(21, write_max(&mut buffer, DecimalU64::<U6>::MAX));
+        assert_eq!(21, write_max(&mut buffer, DecimalU64::<U5>::MAX));
+        assert_eq!(21, write_max(&mut buffer, DecimalU64::<U4>::MAX));
+        assert_eq!(21, write_max(&mut buffer, DecimalU64::<U3>::MAX));
+        assert_eq!(21, write_max(&mut buffer, DecimalU64::<U2>::MAX));
+        assert_eq!(21, write_max(&mut buffer, DecimalU64::<U1>::MAX));
+        assert_eq!(20, write_max(&mut buffer, DecimalU64::<U0>::MAX));
+    }
+
+    #[test]
+    #[should_panic(expected = "provided buffer length 1 is too small, requires at least 21 bytes")]
+    fn should_panic_if_buffer_too_small() {
+        let mut buffer = [0u8; 1];
+        DecimalU64::<U8>::MAX.write_to(&mut buffer);
+    }
+
+    #[test]
+    fn should_write_if_buffer_is_of_exact_size() {
+        let mut buffer = [0u8; U8::REQUIRED_BUFFER_LEN];
+        DecimalU64::<U8>::MAX.write_to(&mut buffer);
     }
 }
