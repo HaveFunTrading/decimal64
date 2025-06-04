@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use decimal64::{DecimalU64, U8};
 use rust_decimal::Decimal;
 use std::str::FromStr;

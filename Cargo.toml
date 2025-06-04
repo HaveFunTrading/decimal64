@@ -1,13 +1,15 @@
 [package]
 name = "decimal64"
-version = "0.0.5"
-edition = "2021"
+version = "0.0.6"
+edition = "2024"
 license = "MIT"
-description = "TBC"
+description = "Fast fixed point arithmetic that only uses u64 as internal representation."
+keywords = ["decimal", "fixed", "precision", "number", "low-latency"]
+categories = ["finance", "science", "data-structures", "mathematics", "parsing"]
 readme = "./README.md"
 documentation = "https://docs.rs/decimal64"
 repository = "https://github.com/HaveFunTrading/decimal64"
-rust-version = "1.84.0"
+rust-version = "1.85.1"
 
 [features]
 default = []

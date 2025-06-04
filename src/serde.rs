@@ -1,6 +1,6 @@
 use crate::{DecimalU64, ScaleMetrics};
 use serde::de::Visitor;
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::fmt;
 use std::marker::PhantomData;
 use std::str::FromStr;
