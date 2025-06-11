@@ -1,6 +1,6 @@
 [package]
 name = "decimal64"
-version = "0.0.6"
+version = "0.0.7"
 edition = "2024"
 license = "MIT"
 description = "Fast fixed point arithmetic that only uses u64 as internal representation."

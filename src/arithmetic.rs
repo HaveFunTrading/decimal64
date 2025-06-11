@@ -1,4 +1,5 @@
 use crate::{DecimalU64, ScaleMetrics};
+use std::iter::Sum;
 use std::ops::{Add, AddAssign, Div, Mul, Sub, SubAssign};
 
 impl<S: ScaleMetrics> Mul for DecimalU64<S> {
@@ -48,7 +49,27 @@ impl<S: ScaleMetrics> Div for DecimalU64<S> {
 
 impl<S: ScaleMetrics> AddAssign for DecimalU64<S> {
     #[inline]
-    fn add_assign(&mut self, rhs: Self) {
+    fn add_assign(&mut self, rhs: DecimalU64<S>) {
+        self.unscaled += rhs.unscaled;
+    }
+}
+
+impl<'a, S: ScaleMetrics> AddAssign<&'a DecimalU64<S>> for DecimalU64<S> {
+    fn add_assign(&mut self, rhs: &'a DecimalU64<S>) {
+        self.unscaled += rhs.unscaled;
+    }
+}
+
+impl<S: ScaleMetrics> AddAssign<DecimalU64<S>> for &mut DecimalU64<S> {
+    #[inline]
+    fn add_assign(&mut self, rhs: DecimalU64<S>) {
+        self.unscaled += rhs.unscaled;
+    }
+}
+
+impl<'a, S: ScaleMetrics> AddAssign<&'a DecimalU64<S>> for &'a mut DecimalU64<S> {
+    #[inline]
+    fn add_assign(&mut self, rhs: &'a DecimalU64<S>) {
         self.unscaled += rhs.unscaled;
     }
 }
@@ -57,6 +78,26 @@ impl<S: ScaleMetrics> SubAssign for DecimalU64<S> {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         self.unscaled -= rhs.unscaled;
+    }
+}
+
+impl<S: ScaleMetrics> Sum for DecimalU64<S> {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        let mut sum = Self::ZERO;
+        for i in iter {
+            sum += i;
+        }
+        sum
+    }
+}
+
+impl<'a, S: ScaleMetrics> Sum<&'a DecimalU64<S>> for DecimalU64<S> {
+    fn sum<I: Iterator<Item = &'a DecimalU64<S>>>(iter: I) -> Self {
+        let mut sum = Self::ZERO;
+        for i in iter {
+            sum += i;
+        }
+        sum
     }
 }
 
@@ -254,6 +295,21 @@ mod tests {
             assert_eq!("300.00000000", one.to_string());
             one -= two;
             assert_eq!("100.00000000", one.to_string());
+        }
+    }
+
+    mod sum {
+        use crate::{DecimalU64, U8};
+
+        #[test]
+        fn should_sum_values() {
+            let values: Vec<DecimalU64<U8>> = vec![];
+            let sum = values.iter().sum::<DecimalU64<U8>>();
+            assert_eq!(sum, DecimalU64::ZERO);
+
+            let values: Vec<DecimalU64<U8>> = vec![DecimalU64::ONE, DecimalU64::TWO];
+            let sum = values.iter().sum::<DecimalU64<U8>>();
+            assert_eq!(sum, DecimalU64::THREE);
         }
     }
 }
