@@ -96,6 +96,14 @@ impl<S: ScaleMetrics> Display for DecimalU64<S> {
 }
 
 impl<S: ScaleMetrics> DecimalU64<S> {
+    #[inline]
+    pub const fn from_raw(unscaled: u64) -> Self {
+        Self {
+            unscaled,
+            phantom: PhantomData,
+        }
+    }
+
     pub const ZERO: Self = DecimalU64::from_raw(0);
     pub const ONE: Self = DecimalU64::from_raw(S::SCALE_FACTOR);
     pub const TWO: Self = DecimalU64::from_raw(2 * S::SCALE_FACTOR);
@@ -109,11 +117,43 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     pub const TEN: Self = DecimalU64::from_raw(10 * S::SCALE_FACTOR);
     pub const MAX: Self = DecimalU64::from_raw(u64::MAX);
 
-    #[inline]
-    pub const fn from_raw(unscaled: u64) -> Self {
-        Self {
-            unscaled,
-            phantom: PhantomData,
+    pub fn rescale_unchecked<T: ScaleMetrics>(&self) -> DecimalU64<T> {
+        if T::SCALE >= S::SCALE {
+            let factor = 10u64.pow((T::SCALE - S::SCALE) as u32);
+            DecimalU64::<T>::from_raw(self.unscaled.saturating_mul(factor))
+        } else {
+            let factor = 10u64.pow((S::SCALE - T::SCALE) as u32);
+            DecimalU64::<T>::from_raw(self.unscaled / factor)
+        }
+    }
+
+    pub fn rescale<T: ScaleMetrics>(&self) -> Result<DecimalU64<T>, self::Error> {
+        if T::SCALE >= S::SCALE {
+            let factor = 10u64
+                .checked_pow((T::SCALE - S::SCALE) as u32)
+                .ok_or_else(|| Error::Overflow(self.unscaled.to_string()))?;
+            let unscaled = self.unscaled
+                .checked_mul(factor)
+                .ok_or_else(|| Error::Overflow(self.unscaled.to_string()))?;
+            Ok(DecimalU64::<T>::from_raw(unscaled))
+        } else {
+            let factor = 10u64
+                .checked_pow((S::SCALE - T::SCALE) as u32)
+                .ok_or_else(|| Error::Overflow(self.unscaled.to_string()))?;
+
+            let truncated = self.unscaled / factor;
+            let remainder = self.unscaled % factor;
+
+            if remainder != 0 {
+                Err(Error::PrecisionLoss(format!(
+                    "Truncated {} fractional digits when rescaling {} -> {}",
+                    S::SCALE - T::SCALE,
+                    self.unscaled,
+                    truncated
+                )))
+            } else {
+                Ok(DecimalU64::<T>::from_raw(truncated))
+            }
         }
     }
 
