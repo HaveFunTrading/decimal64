@@ -481,4 +481,61 @@ mod tests {
         let mut buffer = [0u8; U8::REQUIRED_BUFFER_LEN];
         DecimalU64::<U8>::MAX.write_to(&mut buffer);
     }
+
+    fn decimal<S: ScaleMetrics>(unscaled: u64) -> DecimalU64<S> {
+        DecimalU64::<S>::from_raw(unscaled)
+    }
+
+    #[test]
+    fn test_rescale_unchecked_upscale() {
+        let d: DecimalU64<U2> = decimal(123); // 1.23
+        let rescaled: DecimalU64<U4> = d.rescale_unchecked();
+        // 123 * 10^(4-2) = 123 * 100 = 12300
+        assert_eq!(rescaled.unscaled, 12300);
+    }
+
+    #[test]
+    fn test_rescale_unchecked_downscale() {
+        let d: DecimalU64<U4> = decimal(12345); // 1.2345
+        let rescaled: DecimalU64<U2> = d.rescale_unchecked();
+        // 12345 / 10^(4-2) = 12345 / 100 = 123
+        assert_eq!(rescaled.unscaled, 123);
+    }
+
+    #[test]
+    fn test_rescale_upscale_ok() {
+        let d: DecimalU64<U2> = decimal(50);
+        let rescaled: DecimalU64<U4> = d.rescale().unwrap();
+        assert_eq!(rescaled.unscaled, 5000);
+    }
+
+    #[test]
+    fn test_rescale_downscale_exact() {
+        let d: DecimalU64<U4> = decimal(1200); // 0.12
+        let rescaled: DecimalU64<U2> = d.rescale().unwrap();
+        // 1200 / 100 = 12
+        assert_eq!(rescaled.unscaled, 12);
+    }
+
+    #[test]
+    fn test_rescale_downscale_precision_loss() {
+        let d: DecimalU64<U4> = decimal(1234); // 0.1234
+        let err = d.rescale::<U2>().unwrap_err();
+        match err {
+            Error::PrecisionLoss(msg) => {
+                assert!(msg.contains("Truncated"));
+                assert!(msg.contains("1234"));
+            }
+            _ => panic!("Expected precision loss error"),
+        }
+    }
+
+    #[test]
+    fn test_rescale_upscale_overflow() {
+        // This will overflow when multiplied by 10^(6-2) = 10_000
+        let d: DecimalU64<U2> = decimal(u64::MAX / 1000);
+        let res = d.rescale::<U6>();
+        assert!(matches!(res, Err(Error::Overflow(_))));
+    }
+
 }
