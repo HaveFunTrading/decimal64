@@ -132,7 +132,8 @@ impl<S: ScaleMetrics> DecimalU64<S> {
             let factor = 10u64
                 .checked_pow((T::SCALE - S::SCALE) as u32)
                 .ok_or_else(|| Error::Overflow(self.unscaled.to_string()))?;
-            let unscaled = self.unscaled
+            let unscaled = self
+                .unscaled
                 .checked_mul(factor)
                 .ok_or_else(|| Error::Overflow(self.unscaled.to_string()))?;
             Ok(DecimalU64::<T>::from_raw(unscaled))
@@ -537,5 +538,4 @@ mod tests {
         let res = d.rescale::<U6>();
         assert!(matches!(res, Err(Error::Overflow(_))));
     }
-
 }

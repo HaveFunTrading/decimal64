@@ -9,4 +9,3 @@ pub enum Error {
     #[error("precision loss: {0}")]
     PrecisionLoss(String),
 }
-

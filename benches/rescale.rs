@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use decimal64::{DecimalU64, U2, U8};
 use std::str::FromStr;
 
@@ -10,33 +10,28 @@ fn rescale_benchmark(c: &mut Criterion) {
 
     group.bench_function("rescale_unchecked_up", |b| {
         b.iter(|| {
-            let r: DecimalU64<U8> =
-                black_box(&d_u2).rescale_unchecked();
+            let r: DecimalU64<U8> = black_box(&d_u2).rescale_unchecked();
             black_box(r);
         })
     });
 
     group.bench_function("rescale_unchecked_down", |b| {
         b.iter(|| {
-            let r: DecimalU64<U2> =
-                black_box(&d_u8).rescale_unchecked();
+            let r: DecimalU64<U2> = black_box(&d_u8).rescale_unchecked();
             black_box(r);
         })
     });
 
     group.bench_function("rescale_checked_up", |b| {
         b.iter(|| {
-            let r: DecimalU64<U8> =
-                black_box(&d_u2).rescale().unwrap();
+            let r: DecimalU64<U8> = black_box(&d_u2).rescale().unwrap();
             black_box(r);
         })
     });
-    
 
     group.bench_function("rescale_checked_down", |b| {
         b.iter(|| {
-            let r: DecimalU64<U2> =
-                black_box(&d_u8).rescale().unwrap();
+            let r: DecimalU64<U2> = black_box(&d_u8).rescale().unwrap();
             black_box(r);
         })
     });
