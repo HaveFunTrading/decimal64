@@ -117,7 +117,15 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     pub const TEN: Self = DecimalU64::from_raw(10 * S::SCALE_FACTOR);
     pub const MAX: Self = DecimalU64::from_raw(u64::MAX);
 
-    pub fn rescale_unchecked<T: ScaleMetrics>(&self) -> DecimalU64<T> {
+    /// Rescales this decimal to a different scale **without checking for overflow
+    /// or precision loss**.
+    ///
+    /// # Safety
+    /// The caller must ensure that:
+    /// - The multiplication by the rescaling factor does not overflow `u64`
+    /// - The resulting value is a valid `DecimalU64<T>`
+    /// - Any precision loss caused by downscaling is acceptable
+    pub unsafe fn rescale_unchecked<T: ScaleMetrics>(&self) -> DecimalU64<T> {
         if T::SCALE >= S::SCALE {
             let factor = 10u64.pow((T::SCALE - S::SCALE) as u32);
             DecimalU64::<T>::from_raw(self.unscaled.saturating_mul(factor))
@@ -490,7 +498,7 @@ mod tests {
     #[test]
     fn test_rescale_unchecked_upscale() {
         let d: DecimalU64<U2> = decimal(123); // 1.23
-        let rescaled: DecimalU64<U4> = d.rescale_unchecked();
+        let rescaled: DecimalU64<U4> = unsafe { d.rescale_unchecked() };
         // 123 * 10^(4-2) = 123 * 100 = 12300
         assert_eq!(rescaled.unscaled, 12300);
     }
@@ -498,7 +506,7 @@ mod tests {
     #[test]
     fn test_rescale_unchecked_downscale() {
         let d: DecimalU64<U4> = decimal(12345); // 1.2345
-        let rescaled: DecimalU64<U2> = d.rescale_unchecked();
+        let rescaled: DecimalU64<U2> = unsafe { d.rescale_unchecked() };
         // 12345 / 10^(4-2) = 12345 / 100 = 123
         assert_eq!(rescaled.unscaled, 123);
     }
