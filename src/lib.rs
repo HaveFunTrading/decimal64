@@ -258,6 +258,7 @@ impl<S: ScaleMetrics> DecimalU64<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn should_not_increase_size() {
@@ -496,54 +497,86 @@ mod tests {
     }
 
     #[test]
-    fn test_rescale_unchecked_upscale() {
-        let d: DecimalU64<U2> = decimal(123); // 1.23
-        let rescaled: DecimalU64<U4> = unsafe { d.rescale_unchecked() };
-        // 123 * 10^(4-2) = 123 * 100 = 12300
-        assert_eq!(rescaled.unscaled, 12300);
-    }
-
-    #[test]
-    fn test_rescale_unchecked_downscale() {
-        let d: DecimalU64<U4> = decimal(12345); // 1.2345
-        let rescaled: DecimalU64<U2> = unsafe { d.rescale_unchecked() };
-        // 12345 / 10^(4-2) = 12345 / 100 = 123
-        assert_eq!(rescaled.unscaled, 123);
-    }
-
-    #[test]
     fn test_rescale_upscale_ok() {
         let d: DecimalU64<U2> = decimal(50);
         let rescaled: DecimalU64<U4> = d.rescale().unwrap();
-        assert_eq!(rescaled.unscaled, 5000);
+        assert_eq!(rescaled.unscaled.to_string(), "5000");
     }
 
-    #[test]
+    #[rstest]
+    #[case(decimal::<U2>(123), 12300)] // 1.23 -> 1.2300
+    fn test_rescale_unchecked_upscale(#[case] d: DecimalU64<U2>, #[case] expected: u64) {
+        let rescaled: DecimalU64<U4> = unsafe { d.rescale_unchecked() };
+        assert_eq!(rescaled.unscaled, expected);
+    }
+
+    #[rstest]
+    #[case(decimal::<U4>(12345), 123)] // 1.2345 -> 1.23
+    fn test_rescale_unchecked_downscale(#[case] d: DecimalU64<U4>, #[case] expected: u64) {
+        let rescaled: DecimalU64<U2> = unsafe { d.rescale_unchecked() };
+        assert_eq!(rescaled.unscaled, expected);
+    }
+
+    #[rstest]
+    fn test_rescale_upscale() {
+        let d: DecimalU64<U2> = decimal(50);
+        let rescaled: DecimalU64<U4> = d.rescale().unwrap();
+        assert_eq!(rescaled.unscaled.to_string(), "5000");
+    }
+
+    #[rstest]
     fn test_rescale_downscale_exact() {
-        let d: DecimalU64<U4> = decimal(1200); // 0.12
+        let d: DecimalU64<U4> = decimal(1200);
         let rescaled: DecimalU64<U2> = d.rescale().unwrap();
-        // 1200 / 100 = 12
-        assert_eq!(rescaled.unscaled, 12);
+        assert_eq!(rescaled.unscaled.to_string(), "12");
     }
 
-    #[test]
-    fn test_rescale_downscale_precision_loss() {
-        let d: DecimalU64<U4> = decimal(1234); // 0.1234
+    #[rstest]
+    fn test_rescale_zero() {
+        let d: DecimalU64<U2> = decimal(0);
+        let rescaled: DecimalU64<U4> = d.rescale().unwrap();
+        assert_eq!(rescaled.unscaled.to_string(), "0");
+    }
+
+    #[rstest]
+    fn test_rescale_identity_scale() {
+        let d: DecimalU64<U2> = decimal(123);
+        let rescaled: DecimalU64<U2> = d.rescale().unwrap();
+        assert_eq!(rescaled.unscaled.to_string(), "123");
+    }
+
+    #[rstest]
+    #[case(decimal::<U4>(1234))] // 0.1234 -> truncation
+    #[case(decimal::<U6>(100001))] // tiny truncation
+    fn test_rescale_downscale_precision_loss(#[case] d: DecimalU64<impl ScaleMetrics>) {
         let err = d.rescale::<U2>().unwrap_err();
         match err {
             Error::PrecisionLoss(msg) => {
                 assert!(msg.contains("Truncated"));
-                assert!(msg.contains("1234"));
             }
-            _ => panic!("Expected precision loss error"),
+            _ => panic!("Expected PrecisionLoss"),
         }
     }
 
-    #[test]
+    #[rstest]
+    fn test_rescale_downscale_to_zero() {
+        let d: DecimalU64<U6> = decimal(1); // 0.000001
+        let err = d.rescale::<U2>().unwrap_err();
+        assert!(matches!(err, Error::PrecisionLoss(_)));
+    }
+
+    #[rstest]
     fn test_rescale_upscale_overflow() {
-        // This will overflow when multiplied by 10^(6-2) = 10_000
+        // overflow when multiplied by 10^(6-2) = 10_000
         let d: DecimalU64<U2> = decimal(u64::MAX / 1000);
         let res = d.rescale::<U6>();
+        assert!(matches!(res, Err(Error::Overflow(_))));
+    }
+
+    #[rstest]
+    fn test_rescale_upscale_overflow_boundary() {
+        let d: DecimalU64<U2> = decimal(u64::MAX / 100);
+        let res = d.rescale::<U8>();
         assert!(matches!(res, Err(Error::Overflow(_))));
     }
 }
