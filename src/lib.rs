@@ -127,25 +127,32 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     /// - Any precision loss caused by downscaling is acceptable
     pub unsafe fn rescale_unchecked<T: ScaleMetrics>(&self) -> DecimalU64<T> {
         if T::SCALE >= S::SCALE {
+            // Upscale: multiply
             let factor = 10u64.pow((T::SCALE - S::SCALE) as u32);
             DecimalU64::<T>::from_raw(self.unscaled.saturating_mul(factor))
         } else {
+            // Downscale: divide (truncate)
             let factor = 10u64.pow((S::SCALE - T::SCALE) as u32);
             DecimalU64::<T>::from_raw(self.unscaled / factor)
         }
     }
 
+    /// Checked rescale: returns Overflow or PrecisionLoss errors
     pub fn rescale<T: ScaleMetrics>(&self) -> Result<DecimalU64<T>, self::Error> {
         if T::SCALE >= S::SCALE {
+            // Upscale
             let factor = 10u64
                 .checked_pow((T::SCALE - S::SCALE) as u32)
                 .ok_or_else(|| Error::Overflow(self.unscaled.to_string()))?;
+
             let unscaled = self
                 .unscaled
                 .checked_mul(factor)
                 .ok_or_else(|| Error::Overflow(self.unscaled.to_string()))?;
+
             Ok(DecimalU64::<T>::from_raw(unscaled))
         } else {
+            // Downscale
             let factor = 10u64
                 .checked_pow((S::SCALE - T::SCALE) as u32)
                 .ok_or_else(|| Error::Overflow(self.unscaled.to_string()))?;
@@ -154,6 +161,7 @@ impl<S: ScaleMetrics> DecimalU64<S> {
             let remainder = self.unscaled % factor;
 
             if remainder != 0 {
+                // Precision loss occurred
                 Err(Error::PrecisionLoss(format!(
                     "Truncated {} fractional digits when rescaling {} -> {}",
                     S::SCALE - T::SCALE,
@@ -495,194 +503,238 @@ mod tests {
     fn decimal<S: ScaleMetrics>(unscaled: u64) -> DecimalU64<S> {
         DecimalU64::<S>::from_raw(unscaled)
     }
+    // ===== RESCALE TESTS =====
 
-    // tests for rescale checked and unchecked
+    // Helper to parse a decimal string at a specific scale
+    fn parse_decimal<S: ScaleMetrics>(s: &str) -> DecimalU64<S> {
+        DecimalU64::<S>::from_str(s).unwrap()
+    }
+
+    // Generic rescale test for checked rescale (exact)
+    fn rescale<S1: ScaleMetrics, S2: ScaleMetrics>(s: &'static str) {
+        let s1 = parse_decimal::<S1>(s);
+        let s2 = s1.rescale::<S2>().unwrap();
+
+        // Compare decimal strings ignoring trailing zeros
+        assert_eq!(
+            s1.to_string().trim_end_matches('0').trim_end_matches('.'),
+            s2.to_string().trim_end_matches('0').trim_end_matches('.')
+        );
+    }
+
+    // Generic unchecked rescale test - compare the actual decimal value
+    fn rescale_unchecked<S1: ScaleMetrics, S2: ScaleMetrics>(s: &'static str, expected: &str) {
+        let d = parse_decimal::<S1>(s);
+        let res: DecimalU64<S2> = unsafe { d.rescale_unchecked() };
+        assert_eq!(res.to_string(), expected); // Compare Display output, not unscaled
+    }
+
+    // Generic checked rescale test - compare the actual decimal value
+    fn rescale_checked<S1: ScaleMetrics, S2: ScaleMetrics>(s: &'static str, expected: &str) {
+        let d = parse_decimal::<S1>(s);
+        let res: DecimalU64<S2> = d.rescale().unwrap();
+        assert_eq!(res.to_string(), expected); // Compare Display output, not unscaled
+    }
+
+    // -------------------------
+    // RESCALE UP (checked)
+    // -------------------------
     #[rstest]
-    #[case(decimal::<U0>(0), "0")]
-    #[case(decimal::<U1>(1), "10000000")]
-    #[case(decimal::<U2>(12), "12000000")]
-    #[case(decimal::<U4>(1234), "12340000")]
-    #[case(decimal::<U6>(999999), "99999900")]
-    fn should_upscale_checked(#[case] d: DecimalU64<impl ScaleMetrics>, #[case] expected: String) {
-        let rescaled: DecimalU64<U8> = d.rescale().unwrap();
-        assert_eq!(rescaled.unscaled.to_string(), expected);
+    #[case("0")]
+    #[case("1")]
+    #[case("0.01")]
+    #[case("1.25")]
+    #[case("123.45")]
+    fn rescale_up(#[case] s: &'static str) {
+        rescale::<U2, U5>(s);
+        rescale::<U2, U8>(s);
+        rescale::<U3, U5>(s);
+        rescale::<U5, U8>(s);
+    }
+
+    // -------------------------
+    // RESCALE DOWN (checked)
+    // -------------------------
+    #[rstest]
+    #[case("0")]
+    #[case("1")]
+    #[case("10")]
+    #[case("123")]
+    #[case("1.20")]
+    #[case("123.450")]
+    fn rescale_down(#[case] s: &'static str) {
+        rescale::<U8, U5>(s);
+        rescale::<U8, U2>(s);
+        rescale::<U5, U2>(s);
+        rescale::<U7, U4>(s);
+    }
+
+    // -------------------------
+    // UPSCALE UNCHECKED
+    // -------------------------
+    #[rstest]
+    #[case("0", "0.00000000")]
+    #[case("1", "1.00000000")] // U0 -> U8: 1 becomes 1.00000000
+    #[case("12", "12.00000000")] // U0 -> U8: 12 becomes 12.00000000
+    #[case("1234", "1234.00000000")] // U0 -> U8: 1234 becomes 1234.00000000
+    #[case("999999", "999999.00000000")] // U0 -> U8: 999999 becomes 999999.00000000
+    fn should_upscale_unchecked_u0_to_u8(#[case] s: &'static str, #[case] expected: &str) {
+        rescale_unchecked::<U0, U8>(s, expected);
     }
 
     #[rstest]
-    #[case(decimal::<U8>(0), "0")]
-    #[case(decimal::<U2>(1200), "1200")]
-    #[case(decimal::<U4>(123400), "1234")]
-    #[case(decimal::<U6>(5000000), "500")]
-    #[case(decimal::<U8>(99000000), "99")]
-    fn should_downscale_checked(#[case] d: DecimalU64<impl ScaleMetrics>, #[case] expected: String) {
-        let rescaled: DecimalU64<U2> = d.rescale().unwrap();
-        assert_eq!(rescaled.unscaled.to_string(), expected);
+    #[case("1.23", "1.23000000")] // U2 -> U8: 1.23 becomes 1.23000000
+    #[case("12.34", "12.34000000")] // U2 -> U8: 12.34 becomes 12.34000000
+    #[case("123.45", "123.45000000")] // U2 -> U8: 123.45 becomes 123.45000000
+    #[case("999.99", "999.99000000")] // U2 -> U8: 999.99 becomes 999.99000000
+    fn should_upscale_unchecked_u2_to_u8(#[case] s: &'static str, #[case] expected: &str) {
+        rescale_unchecked::<U2, U8>(s, expected);
     }
 
     #[rstest]
-    #[case(decimal::<U0>(0), "0")]
-    #[case(decimal::<U1>(1), "10000000")]
-    #[case(decimal::<U2>(12), "12000000")]
-    #[case(decimal::<U4>(1234), "12340000")]
-    #[case(decimal::<U6>(999999), "99999900")]
-    fn should_upscale_unchecked(#[case] d: DecimalU64<impl ScaleMetrics>, #[case] expected: String) {
-        let rescaled: DecimalU64<U8> = unsafe { d.rescale_unchecked() };
-        assert_eq!(rescaled.unscaled.to_string(), expected);
+    #[case("1.2345", "1.23450000")] // U4 -> U8: 1.2345 becomes 1.23450000
+    #[case("12.3456", "12.34560000")] // U4 -> U8: 12.3456 becomes 12.34560000
+    fn should_upscale_unchecked_u4_to_u8(#[case] s: &'static str, #[case] expected: &str) {
+        rescale_unchecked::<U4, U8>(s, expected);
+    }
+
+    // -------------------------
+    // DOWNSCALE UNCHECKED
+    // -------------------------
+    #[rstest]
+    #[case("1.20000000", "1.20")] // U8 -> U2: 1.20000000 becomes 1.20
+    #[case("123.40000000", "123.40")] // U8 -> U2: 123.40000000 becomes 123.40
+    #[case("0.50000000", "0.50")] // U8 -> U2: 0.50000000 becomes 0.50
+    #[case("0.99000000", "0.99")] // U8 -> U2: 0.99000000 becomes 0.99
+    #[case("123.45678900", "123.45")] // U8 -> U2: 123.45678900 becomes 123.45 (truncated)
+    fn should_downscale_unchecked_u8_to_u2(#[case] s: &'static str, #[case] expected: &str) {
+        rescale_unchecked::<U8, U2>(s, expected);
     }
 
     #[rstest]
-    #[case(decimal::<U8>(0), "0")]
-    #[case(decimal::<U2>(1200), "1200")]
-    #[case(decimal::<U4>(123400), "1234")]
-    #[case(decimal::<U6>(5000000), "500")]
-    #[case(decimal::<U8>(99999900), "99")]
-    fn should_downscale_unchecked(#[case] d: DecimalU64<impl ScaleMetrics>, #[case] expected: String) {
-        let rescaled: DecimalU64<U2> = unsafe { d.rescale_unchecked() };
-        assert_eq!(rescaled.unscaled.to_string(), expected);
+    #[case("1.20000000", "1.200")] // U8 -> U3: 1.20000000 becomes 1.200
+    #[case("123.45678900", "123.456")] // U8 -> U3: 123.45678900 becomes 123.456 (truncated)
+    fn should_downscale_unchecked_u8_to_u3(#[case] s: &'static str, #[case] expected: &str) {
+        rescale_unchecked::<U8, U3>(s, expected);
     }
 
     #[rstest]
-    #[case(decimal::<U2>(50), "50")]
-    #[case(decimal::<U2>(12345), "12345")]
-    fn should_not_rescale_with_same_base_unchecked(#[case] d: DecimalU64<impl ScaleMetrics>, #[case] expected: String) {
+    #[case("1.20000000", "1.2")] // U8 -> U1: 1.20000000 becomes 1.2
+    #[case("123.40000000", "123.4")] // U8 -> U1: 123.40000000 becomes 123.4
+    fn should_downscale_unchecked_u8_to_u1(#[case] s: &'static str, #[case] expected: &str) {
+        rescale_unchecked::<U8, U1>(s, expected);
+    }
+
+    #[rstest]
+    #[case("1.20000000", "1")] // U8 -> U0: 1.20000000 becomes 1
+    #[case("123.40000000", "123")] // U8 -> U0: 123.40000000 becomes 123
+    #[case("0.50000000", "0")] // U8 -> U0: 0.50000000 becomes 0 (truncated)
+    fn should_downscale_unchecked_u8_to_u0(#[case] s: &'static str, #[case] expected: &str) {
+        rescale_unchecked::<U8, U0>(s, expected);
+    }
+
+    // --------------------------
+    // SAME BASE (unchecked)
+    // --------------------------
+    #[rstest]
+    #[case("50")]
+    #[case("12345")]
+    fn should_not_rescale_with_same_base_unchecked(#[case] s: &str) {
+        let d = DecimalU64::<U2>::from_str(s).unwrap();
         let res: DecimalU64<U2> = unsafe { d.rescale_unchecked() };
-        assert_eq!(res.unscaled.to_string(), expected);
+        assert_eq!(res.to_string(), d.to_string());
     }
 
+    // -------------------------
+    // SAME BASE (checked)
+    // -------------------------
     #[rstest]
-    #[case(decimal::<U4>(50), "50")]
-    #[case(decimal::<U4>(12345), "12345")]
-    fn should_not_rescale_with_same_base_checked(#[case] d: DecimalU64<impl ScaleMetrics>, #[case] expected: String) {
-        let res: DecimalU64<U4> = d.rescale().unwrap();
-        assert_eq!(res.unscaled.to_string(), expected);
+    #[case("50", "50")]
+    #[case("12345", "12345")]
+    fn should_not_rescale_with_same_base(#[case] s: &'static str, #[case] expected: &str) {
+        let d = DecimalU64::<U4>::from_str(s).unwrap();
+        let res = d.rescale::<U4>().unwrap();
+
+        // Compare decimal strings ignoring trailing zeros
+        assert_eq!(res.to_string().trim_end_matches('0').trim_end_matches('.'), expected);
     }
 
+    // -------------------------
+    // ROUND-TRIP INVARIANT
+    // -------------------------
     #[rstest]
-    #[case(decimal::<U2>(12345))]
-    #[case(decimal::<U2>(123400))]
-    // Only check this property for checked as unchecked allows precision loss
-    fn should_round_trip_invariant_checked(#[case] d: DecimalU64<impl ScaleMetrics>) {
-        let res_up: DecimalU64<U8> = d.rescale().unwrap();
-        let res_down: DecimalU64<U2> = res_up.rescale().unwrap();
-        if res_down.unscaled != 0 {
-            assert_eq!(res_down.unscaled, d.unscaled);
+    #[case("12345")]
+    #[case("123400")]
+    fn should_round_trip_invariant(#[case] s: &'static str) {
+        let d = DecimalU64::<U2>::from_str(s).unwrap();
+        let up: DecimalU64<U8> = d.rescale().unwrap();
+        let down: DecimalU64<U2> = up.rescale().unwrap();
+
+        // Compare decimal values, not unscaled
+        assert_eq!(d.to_string().trim_end_matches('0'), down.to_string().trim_end_matches('0'));
+    }
+
+    // -------------------------
+    // TRUNCATE DOWNSCALE (unchecked)
+    // -------------------------
+    #[rstest]
+    #[case("123.45678900", "123.45")] // U8 -> U2: truncate to 2 decimals
+    #[case("500.12345600", "500.12")] // U8 -> U2: truncate to 2 decimals
+    #[case("0.99999900", "0.99")] // U8 -> U2: truncate to 2 decimals
+    fn should_truncate_downscale(#[case] s: &str, #[case] expected: &str) {
+        let d = DecimalU64::<U8>::from_str(s).unwrap();
+        let res: DecimalU64<U2> = unsafe { d.rescale_unchecked() };
+        assert_eq!(res.to_string(), expected);
+    }
+
+    // -------------------------
+    // ZERO ACROSS SCALES
+    // -------------------------
+    #[rstest]
+    #[case("0")]
+    fn should_rescale_zero_all_scales(#[case] s: &'static str) {
+        let d = DecimalU64::<U0>::from_str(s).unwrap();
+        let up_checked: DecimalU64<U8> = d.rescale().unwrap();
+        let up_unchecked: DecimalU64<U8> = unsafe { d.rescale_unchecked() };
+        let down_checked: DecimalU64<U0> = up_checked.rescale().unwrap();
+        let down_unchecked: DecimalU64<U0> = unsafe { up_unchecked.rescale_unchecked() };
+
+        assert_eq!(up_checked.to_string(), "0.00000000");
+        assert_eq!(up_unchecked.to_string(), "0.00000000");
+        assert_eq!(down_checked.to_string(), "0");
+        assert_eq!(down_unchecked.to_string(), "0");
+    }
+
+    // -------------------------
+    // PRECISION LOSS (checked)
+    // -------------------------
+    #[test]
+    fn should_error_on_precision_loss() {
+        let d = DecimalU64::<U4>::from_str("101.2038").unwrap(); // 4 decimal places
+        let result: Result<DecimalU64<U2>, Error> = d.rescale(); // Downscale to 2 decimals
+
+        assert!(result.is_err());
+        match result {
+            Err(Error::PrecisionLoss(msg)) => {
+                assert!(msg.contains("Truncated") || msg.contains("precision"));
+            }
+            _ => panic!("Expected PrecisionLoss error"),
         }
     }
 
-    #[rstest]
-    #[case(decimal::<U4>(1234), "12")]
-    #[case(decimal::<U4>(1200), "12")]
-    #[case(decimal::<U6>(5_000_001), "500")]
-    #[case(decimal::<U8>(5_000_001), "5")]
-    fn should_trunacate_downscale(#[case] d: DecimalU64<impl ScaleMetrics>, #[case] expected: String) {
-        let res: DecimalU64<U2> = unsafe { d.rescale_unchecked() };
-        assert_eq!(res.unscaled.to_string(), expected);
-    }
+    // -------------------------
+    // OVERFLOW (checked)
+    // -------------------------
+    #[test]
+    fn should_error_on_overflow() {
+        // Try to upscale MAX value at U0 to U1 (would multiply by 10, causing overflow)
+        let d = DecimalU64::<U0>::MAX;
+        let result: Result<DecimalU64<U1>, Error> = d.rescale();
 
-    #[rstest]
-    #[case(decimal::<U0>(0))]
-    #[case(decimal::<U1>(0))]
-    #[case(decimal::<U2>(0))]
-    #[case(decimal::<U3>(0))]
-    #[case(decimal::<U4>(0))]
-    #[case(decimal::<U5>(0))]
-    #[case(decimal::<U6>(0))]
-    #[case(decimal::<U7>(0))]
-    #[case(decimal::<U8>(0))]
-    // Tests to ensure upscales + downscales where unscaled value is 0 will always be 0
-    fn should_rescale_zero_all_scales(#[case] d: DecimalU64<impl ScaleMetrics>) {
-        let res_checked: DecimalU64<U8> = d.rescale().unwrap();
-        let res_unchecked: DecimalU64<U8> = unsafe { d.rescale_unchecked() };
-        assert_eq!(res_checked.unscaled.to_string(), "0");
-        assert_eq!(res_unchecked.unscaled.to_string(), "0");
-
-        let res_checked_down: DecimalU64<U0> = d.rescale().unwrap();
-        let res_unchecked_down: DecimalU64<U0> = unsafe { d.rescale_unchecked() };
-        assert_eq!(res_checked_down.unscaled.to_string(), "0");
-        assert_eq!(res_unchecked_down.unscaled.to_string(), "0");
-    }
-
-    #[rstest]
-    #[case(decimal::<U8>(12000000), "12")]
-    #[case(decimal::<U4>(123400), "1234")]
-    #[case(decimal::<U6>(50000), "5")]
-    fn should_downscale_at_scale_boundary_checked_unchecked(
-        #[case] d: DecimalU64<impl ScaleMetrics>,
-        #[case] expected: &str,
-    ) {
-        let res_checked: DecimalU64<U2> = d.rescale().unwrap();
-        let res_unchecked: DecimalU64<U2> = unsafe { d.rescale_unchecked() };
-
-        assert_eq!(res_checked.unscaled.to_string(), expected);
-        assert_eq!(res_unchecked.unscaled.to_string(), expected);
-    }
-
-    #[rstest]
-    #[case(decimal::<U8>(9999999999))]
-    #[case(decimal::<U6>(999999))]
-    #[case(decimal::<U4>(9999))]
-    #[should_panic(expected = "PrecisionLoss")]
-    fn should_return_precision_loss(#[case] d: DecimalU64<impl ScaleMetrics>) {
-        let _: DecimalU64<U2> = d.rescale().unwrap();
-    }
-
-    #[rstest]
-    #[case(decimal::<U0>(u64::MAX / 10 + 1))]
-    #[should_panic(expected = "Overflow")]
-    fn should_upscale_checked_overflow(#[case] d: DecimalU64<impl ScaleMetrics>) {
-        let _res: DecimalU64<U1> = d.rescale().unwrap();
-    }
-
-    #[rstest]
-    #[case(decimal::<U0>(u64::MAX / 10))]
-    fn should_upscale_checked_safe(#[case] d: DecimalU64<impl ScaleMetrics>) {
-        let res: DecimalU64<U1> = d.rescale().unwrap();
-        assert_eq!(res.unscaled.to_string(), ((d.unscaled * 10) as u64).to_string());
-    }
-
-    #[rstest]
-    #[case(decimal::<U0>(u64::MAX))]
-    fn should_upscale_u64_boundary_unchecked(#[case] d: DecimalU64<impl ScaleMetrics>) {
-        let res: DecimalU64<U2> = unsafe { d.rescale_unchecked() };
-        let expected = (d.unscaled as u128 * 100).min(u64::MAX as u128) as u64;
-        assert_eq!(res.unscaled.to_string(), expected.to_string());
-    }
-
-    #[rstest]
-    #[case(decimal::<U4>(100))]
-    fn should_downscale_checked_exact(#[case] d: DecimalU64<impl ScaleMetrics>) {
-        let res: DecimalU64<U2> = d.rescale().unwrap();
-        let expected = d.unscaled / 100;
-        assert_eq!(res.unscaled.to_string(), expected.to_string());
-    }
-
-    #[rstest]
-    #[case(decimal::<U4>(101))]
-    #[should_panic(expected = "PrecisionLoss")]
-    fn should_downscale_checked_precision_loss(#[case] d: DecimalU64<impl ScaleMetrics>) {
-        let _res: DecimalU64<U2> = d.rescale().unwrap();
-    }
-
-    #[rstest]
-    #[case(decimal::<U4>((u64::MAX / 100) * 100))]
-    fn should_downscale_checked_large_exact(#[case] d: DecimalU64<impl ScaleMetrics>) {
-        let res: DecimalU64<U2> = d.rescale().unwrap();
-        let expected = d.unscaled / 100;
-        assert_eq!(res.unscaled.to_string(), expected.to_string());
-    }
-
-    #[rstest]
-    #[case(decimal::<U4>(u64::MAX))]
-    #[should_panic(expected = "PrecisionLoss")]
-    fn should_downscale_checked_large_remainder(#[case] d: DecimalU64<impl ScaleMetrics>) {
-        let _res: DecimalU64<U2> = d.rescale().unwrap();
-    }
-
-    #[rstest]
-    #[case(decimal::<U4>(101))]
-    fn should_downscale_unchecked_u64_boundary(#[case] d: DecimalU64<impl ScaleMetrics>) {
-        let res: DecimalU64<U2> = unsafe { d.rescale_unchecked() };
-        let expected = d.unscaled / 100;
-        assert_eq!(res.unscaled.to_string(), expected.to_string());
+        assert!(result.is_err());
+        match result {
+            Err(Error::Overflow(_)) => {}
+            _ => panic!("Expected Overflow error"),
+        }
     }
 }
