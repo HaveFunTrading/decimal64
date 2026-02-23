@@ -37,3 +37,7 @@ name = "mul"
 path = "benches/mul.rs"
 harness = false
 
+[[bench]]
+name = "f64"
+path = "benches/f64.rs"
+harness = false

@@ -264,16 +264,13 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     /// ```
     pub fn rescale<T: ScaleMetrics>(&self) -> Result<DecimalU64<T>, self::Error> {
         if T::SCALE >= S::SCALE {
-            // Upscale
+            // upscale
             let factor = 10u64.checked_pow((T::SCALE - S::SCALE) as u32).ok_or(Error::Overflow)?;
-
             let unscaled = self.0.checked_mul(factor).ok_or(Error::Overflow)?;
-
             Ok(DecimalU64::<T>::new(unscaled))
         } else {
-            // Downscale
+            // downscale
             let factor = 10u64.checked_pow((S::SCALE - T::SCALE) as u32).ok_or(Error::Overflow)?;
-
             let truncated = self.0 / factor;
             let remainder = self.0 % factor;
 
