@@ -1,4 +1,4 @@
-use crate::error::Error;
+use crate::error::{Error, InvalidInputKind};
 use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
 use std::str::FromStr;
@@ -27,6 +27,7 @@ gen_scale!(U7, 7, 21);
 gen_scale!(U8, 8, 21);
 
 const SCALE_FACTORS: [u64; 9] = [1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000];
+const POW5_U128: [u128; 9] = [1, 5, 25, 125, 625, 3125, 15625, 78125, 390625];
 
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
@@ -54,29 +55,55 @@ impl<S: ScaleMetrics> TryFrom<&[u8]> for DecimalU64<S> {
                 b'0'..=b'9' => {
                     unscaled = (unscaled * 10)
                         .checked_add((byte - b'0') as u64)
-                        .ok_or_else(|| Error::Overflow(String::from_utf8_lossy(bytes).to_string()))?;
+                        .ok_or(Error::Overflow)?;
 
                     scale_counter += fractional_part_flag;
                 }
                 b'.' => fractional_part_flag = 1,
-                other => return Err(Error::InvalidCharacterInput(other as char)),
+                other => return Err(Error::InvalidInput(InvalidInputKind::InvalidCharacter(other as char))),
             }
         }
 
         let unscaled = unscaled
             .checked_mul(*unsafe {
-                SCALE_FACTORS.get_unchecked(
-                    S::SCALE
-                        .checked_sub(scale_counter)
-                        .ok_or_else(|| Error::Overflow(String::from_utf8_lossy(bytes).to_string()))?
-                        as usize,
-                )
+                SCALE_FACTORS.get_unchecked(S::SCALE.checked_sub(scale_counter).ok_or(Error::Overflow)? as usize)
             })
-            .ok_or_else(|| Error::Overflow(String::from_utf8_lossy(bytes).to_string()))?;
+            .ok_or(Error::Overflow)?;
 
         Ok(Self(unscaled, PhantomData))
     }
 }
+
+// impl<S: ScaleMetrics> DecimalU64<S> {
+//     #[inline]
+//     const fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+//         let mut unscaled: u64 = 0;
+//         let mut fractional_part_flag = 0;
+//         let mut scale_counter = 0;
+//
+//         for &byte in bytes {
+//             match byte {
+//                 b'0'..=b'9' => {
+//                     unscaled = (unscaled * 10)
+//                         .checked_add((byte - b'0') as u64)
+//                         .ok_or(Error::Overflow)?;
+//
+//                     scale_counter += fractional_part_flag;
+//                 }
+//                 b'.' => fractional_part_flag = 1,
+//                 other => return Err(Error::InvalidInput(InvalidInputKind::InvalidCharacter(other as char))),
+//             }
+//         }
+//
+//         let unscaled = unscaled
+//             .checked_mul(*unsafe {
+//                 SCALE_FACTORS.get_unchecked(S::SCALE.checked_sub(scale_counter).ok_or(Error::Overflow)? as usize)
+//             })
+//             .ok_or(Error::Overflow)?;
+//
+//         Ok(Self(unscaled, PhantomData))
+//     }
+// }
 
 impl<S: ScaleMetrics> Display for DecimalU64<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -107,6 +134,80 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     pub const NINE: Self = DecimalU64::new(9 * S::SCALE_FACTOR);
     pub const TEN: Self = DecimalU64::new(10 * S::SCALE_FACTOR);
     pub const MAX: Self = DecimalU64::new(u64::MAX);
+
+    /// Converts this decimal to `f64`.
+    pub const fn to_f64(self) -> f64 {
+        self.0 as f64 / S::SCALE_FACTOR as f64
+    }
+
+    /// Creates a decimal from `f64`, rounding half-up at the target scale.
+    /// Returns an error on invalid input or overflow.
+    pub const fn from_f64(value: f64) -> Result<Self, Error> {
+        const EXP_BITS: u64 = 0x7ff;
+        const EXP_BIAS: i32 = 1023;
+        const MANTISSA_BITS: u32 = 52;
+        const MANTISSA_MASK: u64 = (1u64 << MANTISSA_BITS) - 1;
+
+        let bits = value.to_bits();
+        let sign = bits >> 63;
+        let exp_bits = ((bits >> MANTISSA_BITS) & EXP_BITS) as u16;
+        let frac_bits = bits & MANTISSA_MASK;
+
+        if exp_bits == EXP_BITS as u16 {
+            return Err(Error::InvalidInput(InvalidInputKind::InfiniteNumber));
+        }
+        if sign == 1 && (exp_bits != 0 || frac_bits != 0) {
+            return Err(Error::InvalidInput(InvalidInputKind::NegativeNumber));
+        }
+        if exp_bits == 0 && frac_bits == 0 {
+            return Ok(Self::ZERO);
+        }
+
+        let (mantissa, exp2) = if exp_bits == 0 {
+            (frac_bits as u128, 1 - EXP_BIAS - MANTISSA_BITS as i32)
+        } else {
+            let mantissa = ((1u64 << MANTISSA_BITS) | frac_bits) as u128;
+            (mantissa, exp_bits as i32 - EXP_BIAS - MANTISSA_BITS as i32)
+        };
+
+        // value = mantissa * 2^exp2; scaling by 10^S becomes 5^S * 2^(exp2 + S).
+        let base = mantissa * POW5_U128[S::SCALE as usize];
+        let exp2 = exp2 + S::SCALE as i32;
+
+        if exp2 >= 0 {
+            let shift = exp2 as u32;
+            if shift >= 128 {
+                return Err(Error::Overflow);
+            }
+            if base > (u64::MAX as u128 >> shift) {
+                return Err(Error::Overflow);
+            }
+            let unscaled = base << shift;
+            Ok(DecimalU64::new(unscaled as u64))
+        } else {
+            let shift = (-exp2) as u32;
+            if shift >= 128 {
+                // Denominator exceeds u128; remainder cannot reach half, so this rounds to zero.
+                return Ok(Self::ZERO);
+            }
+            let denom = 1u128 << shift;
+            let mut unscaled = base / denom;
+            let remainder = base % denom;
+
+            if remainder != 0 && (remainder << 1) >= denom {
+                if unscaled == u64::MAX as u128 {
+                    return Err(Error::Overflow);
+                }
+                unscaled += 1;
+            }
+
+            if unscaled > u64::MAX as u128 {
+                return Err(Error::Overflow);
+            }
+
+            Ok(DecimalU64::new(unscaled as u64))
+        }
+    }
 
     /// Rescales this decimal to a different scale **without checking for overflow
     /// or precision loss**.
@@ -164,32 +265,24 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     pub fn rescale<T: ScaleMetrics>(&self) -> Result<DecimalU64<T>, self::Error> {
         if T::SCALE >= S::SCALE {
             // Upscale
-            let factor = 10u64.checked_pow((T::SCALE - S::SCALE) as u32).ok_or_else(|| {
-                Error::Overflow(format!("unable to upscale {} from {} to {}", self, S::SCALE, T::SCALE))
-            })?;
+            let factor = 10u64.checked_pow((T::SCALE - S::SCALE) as u32).ok_or(Error::Overflow)?;
 
-            let unscaled = self.0.checked_mul(factor).ok_or_else(|| {
-                Error::Overflow(format!("unable to upscale {} from {} to {}", self, S::SCALE, T::SCALE))
-            })?;
+            let unscaled = self.0.checked_mul(factor).ok_or(Error::Overflow)?;
 
             Ok(DecimalU64::<T>::new(unscaled))
         } else {
             // Downscale
-            let factor = 10u64.checked_pow((S::SCALE - T::SCALE) as u32).ok_or_else(|| {
-                Error::Overflow(format!("unable to downscale {} from {} to {}", self, S::SCALE, T::SCALE))
-            })?;
+            let factor = 10u64.checked_pow((S::SCALE - T::SCALE) as u32).ok_or(Error::Overflow)?;
 
             let truncated = self.0 / factor;
             let remainder = self.0 % factor;
 
             if remainder != 0 {
                 // Precision loss occurred
-                Err(Error::PrecisionLoss(format!(
-                    "truncated {} fractional digits when rescaling {} -> {}",
-                    S::SCALE - T::SCALE,
-                    self.0,
-                    truncated
-                )))
+                Err(Error::PrecisionLoss {
+                    from_scale: S::SCALE,
+                    to_scale: T::SCALE,
+                })
             } else {
                 Ok(DecimalU64::<T>::new(truncated))
             }
@@ -436,13 +529,19 @@ mod tests {
         let err = DecimalU64::<U8>::from_str("184467440737.09551616");
         assert!(err.is_err());
         if let Err(err) = err {
-            assert_eq!("overflow: 184467440737.09551616", err.to_string());
+            assert!(matches!(err, Error::Overflow));
         }
     }
 
     #[test]
     fn should_create_from_str() {
         assert_eq!(12345000001, DecimalU64::<U8>::from_str("123.45000001").unwrap().0);
+    }
+
+    #[test]
+    fn should_error_on_from_f64_overflow() {
+        let err = DecimalU64::<U0>::from_f64(1e30);
+        assert!(matches!(err, Err(Error::Overflow)));
     }
 
     #[test]
@@ -765,8 +864,9 @@ mod rescale_tests {
 
         assert!(result.is_err());
         match result {
-            Err(Error::PrecisionLoss(msg)) => {
-                assert!(msg.contains("Truncated") || msg.contains("precision"));
+            Err(Error::PrecisionLoss { from_scale, to_scale }) => {
+                assert_eq!(4, from_scale);
+                assert_eq!(2, to_scale);
             }
             _ => panic!("Expected PrecisionLoss error"),
         }
@@ -780,8 +880,52 @@ mod rescale_tests {
 
         assert!(result.is_err());
         match result {
-            Err(Error::Overflow(_)) => {}
+            Err(Error::Overflow) => {}
             _ => panic!("Expected Overflow error"),
         }
+    }
+}
+
+#[cfg(test)]
+mod f64_tests {
+    use crate::error::{Error, InvalidInputKind};
+    use crate::{DecimalU64, U2};
+
+    #[test]
+    fn should_convert_to_f64() {
+        const VALUE: f64 = DecimalU64::<U2>::new(1234).to_f64();
+        assert!((VALUE - 12.34).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn should_create_from_f64() -> anyhow::Result<()> {
+        let dec = DecimalU64::<U2>::from_f64(12.25)?;
+        assert_eq!("12.25", dec.to_string());
+        Ok(())
+    }
+
+    #[test]
+    fn should_create_from_f64_as_const() {
+        const VALUE: Result<DecimalU64<U2>, Error> = DecimalU64::from_f64(12.25);
+        assert_eq!("12.25", VALUE.unwrap().to_string());
+    }
+
+    #[test]
+    fn should_round_from_f64_half_up() -> anyhow::Result<()> {
+        let dec = DecimalU64::<U2>::from_f64(0.125)?;
+        assert_eq!("0.13", dec.to_string());
+        Ok(())
+    }
+
+    #[test]
+    fn should_error_on_from_f64_infinity() {
+        let err = DecimalU64::<U2>::from_f64(f64::INFINITY);
+        assert!(matches!(err, Err(Error::InvalidInput(InvalidInputKind::InfiniteNumber))));
+    }
+
+    #[test]
+    fn should_error_on_from_f64_negative() {
+        let err = DecimalU64::<U2>::from_f64(-1.0);
+        assert!(matches!(err, Err(Error::InvalidInput(InvalidInputKind::NegativeNumber))));
     }
 }
