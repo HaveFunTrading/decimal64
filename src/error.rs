@@ -6,8 +6,6 @@ pub enum Error {
     InvalidInput(InvalidInputKind),
     #[error("overflow")]
     Overflow,
-    #[error("precision loss: {from_scale} -> {to_scale}")]
-    PrecisionLoss { from_scale: u8, to_scale: u8 },
 }
 
 #[derive(Error, Debug, Copy, Clone, Eq, PartialEq)]

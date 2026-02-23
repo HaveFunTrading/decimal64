@@ -46,3 +46,8 @@ harness = false
 name = "math"
 path = "benches/math.rs"
 harness = false
+
+[[bench]]
+name = "rescale"
+path = "benches/rescale.rs"
+harness = false

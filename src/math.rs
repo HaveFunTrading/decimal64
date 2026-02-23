@@ -210,11 +210,7 @@ mod tests {
 
     fn assert_close(actual: DecimalU64<U6>, expected: &str, tolerance: u64) {
         let expected = DecimalU64::<U6>::from_str(expected).unwrap();
-        let diff = if actual.0 > expected.0 {
-            actual.0 - expected.0
-        } else {
-            expected.0 - actual.0
-        };
+        let diff = actual.0.abs_diff(expected.0);
         assert!(diff <= tolerance);
     }
 
@@ -247,10 +243,7 @@ mod tests {
     fn should_error_ln_less_than_one() {
         let value = DecimalU64::<U6>::from_str("0.5").unwrap();
         let err = value.ln();
-        assert!(matches!(
-            err,
-            Err(Error::InvalidInput(InvalidInputKind::LessThanOne))
-        ));
+        assert!(matches!(err, Err(Error::InvalidInput(InvalidInputKind::LessThanOne))));
     }
 
     #[test]
