@@ -6,4 +6,6 @@ pub enum Error {
     InvalidCharacterInput(char),
     #[error("overflow: {0}")]
     Overflow(String),
+    #[error("precision loss: {0}")]
+    PrecisionLoss(String),
 }
