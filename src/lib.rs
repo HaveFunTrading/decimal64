@@ -185,7 +185,7 @@ impl<S: ScaleMetrics> DecimalU64<S> {
             if remainder != 0 {
                 // Precision loss occurred
                 Err(Error::PrecisionLoss(format!(
-                    "Truncated {} fractional digits when rescaling {} -> {}",
+                    "truncated {} fractional digits when rescaling {} -> {}",
                     S::SCALE - T::SCALE,
                     self.0,
                     truncated
@@ -216,6 +216,32 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     }
 
     #[inline]
+    /// Writes this decimal into `buffer` and returns the number of bytes written.  The buffer must
+    /// be at least `S::REQUIRED_BUFFER_LEN` bytes. Output includes trailing zeros to match the scale.
+    ///
+    /// If you required trimmed output, use [`Self::write_to_trimmed`].
+    ///
+    /// ## Examples
+    /// No trailing zeroes.
+    /// ```no_run
+    /// use std::str::FromStr;
+    /// use decimal64::{DecimalU64, ScaleMetrics, U2};
+    ///
+    /// let value = DecimalU64::<U2>::from_str("12.34").unwrap();
+    /// let mut buffer = [0u8; U2::REQUIRED_BUFFER_LEN];
+    /// let len = value.write_to(&mut buffer);
+    /// assert_eq!("12.34", std::str::from_utf8(&buffer[..len]).unwrap());
+    /// ```
+    /// With trailing zeroes
+    /// ```no_run
+    /// use std::str::FromStr;
+    /// use decimal64::{DecimalU64, ScaleMetrics, U2};
+    ///
+    /// let value = DecimalU64::<U2>::from_str("1.2").unwrap();
+    /// let mut buffer = [0u8; U2::REQUIRED_BUFFER_LEN];
+    /// let len = value.write_to(&mut buffer);
+    /// assert_eq!("1.20", std::str::from_utf8(&buffer[..len]).unwrap());
+    /// ```
     pub fn write_to(&self, buffer: &mut [u8]) -> usize {
         #[cold]
         #[inline(never)]
@@ -282,6 +308,46 @@ impl<S: ScaleMetrics> DecimalU64<S> {
         }
 
         pos
+    }
+
+    /// Writes this decimal into `buffer` without trailing fractional zeros.
+    ///
+    /// If you required untrimmed output, use [`Self::write_to`].
+    ///
+    /// # Example
+    /// ```no_run
+    /// use std::str::FromStr;
+    /// use decimal64::{DecimalU64, U4};
+    ///
+    /// let value = DecimalU64::<U4>::from_str("12.3400").unwrap();
+    /// let mut buffer = [0u8; 32];
+    /// let len = value.write_to_trimmed(&mut buffer);
+    /// assert_eq!("12.34", std::str::from_utf8(&buffer[..len]).unwrap());
+    /// ```
+    pub fn write_to_trimmed(&self, buffer: &mut [u8]) -> usize {
+        let len = self.write_to(buffer);
+        if S::SCALE == 0 {
+            return len;
+        }
+
+        let mut end = len;
+        while end > 0 {
+            // SAFETY: end > 0 and end <= len <= buffer.len()
+            let byte = unsafe { *buffer.get_unchecked(end - 1) };
+            if byte != b'0' {
+                break;
+            }
+            end -= 1;
+        }
+        if end > 0 {
+            // SAFETY: end > 0 and end <= len <= buffer.len()
+            let byte = unsafe { *buffer.get_unchecked(end - 1) };
+            if byte == b'.' {
+                end -= 1;
+            }
+        }
+
+        end
     }
 }
 
