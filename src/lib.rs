@@ -30,10 +30,7 @@ const SCALE_FACTORS: [u64; 9] = [1, 10, 100, 1000, 10000, 100000, 1000000, 10000
 
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
-pub struct DecimalU64<S> {
-    pub unscaled: u64,
-    phantom: PhantomData<S>,
-}
+pub struct DecimalU64<S>(pub u64, PhantomData<S>);
 
 impl<S: ScaleMetrics> FromStr for DecimalU64<S> {
     type Err = Error;
@@ -77,10 +74,7 @@ impl<S: ScaleMetrics> TryFrom<&[u8]> for DecimalU64<S> {
             })
             .ok_or_else(|| Error::Overflow(String::from_utf8_lossy(bytes).to_string()))?;
 
-        Ok(Self {
-            unscaled,
-            phantom: PhantomData,
-        })
+        Ok(Self(unscaled, PhantomData))
     }
 }
 
@@ -97,25 +91,22 @@ impl<S: ScaleMetrics> Display for DecimalU64<S> {
 
 impl<S: ScaleMetrics> DecimalU64<S> {
     #[inline]
-    pub const fn from_raw(unscaled: u64) -> Self {
-        Self {
-            unscaled,
-            phantom: PhantomData,
-        }
+    pub const fn new(unscaled: u64) -> Self {
+        Self(unscaled, PhantomData)
     }
 
-    pub const ZERO: Self = DecimalU64::from_raw(0);
-    pub const ONE: Self = DecimalU64::from_raw(S::SCALE_FACTOR);
-    pub const TWO: Self = DecimalU64::from_raw(2 * S::SCALE_FACTOR);
-    pub const THREE: Self = DecimalU64::from_raw(3 * S::SCALE_FACTOR);
-    pub const FOUR: Self = DecimalU64::from_raw(4 * S::SCALE_FACTOR);
-    pub const FIVE: Self = DecimalU64::from_raw(5 * S::SCALE_FACTOR);
-    pub const SIX: Self = DecimalU64::from_raw(6 * S::SCALE_FACTOR);
-    pub const SEVEN: Self = DecimalU64::from_raw(7 * S::SCALE_FACTOR);
-    pub const EIGHT: Self = DecimalU64::from_raw(8 * S::SCALE_FACTOR);
-    pub const NINE: Self = DecimalU64::from_raw(9 * S::SCALE_FACTOR);
-    pub const TEN: Self = DecimalU64::from_raw(10 * S::SCALE_FACTOR);
-    pub const MAX: Self = DecimalU64::from_raw(u64::MAX);
+    pub const ZERO: Self = DecimalU64::new(0);
+    pub const ONE: Self = DecimalU64::new(S::SCALE_FACTOR);
+    pub const TWO: Self = DecimalU64::new(2 * S::SCALE_FACTOR);
+    pub const THREE: Self = DecimalU64::new(3 * S::SCALE_FACTOR);
+    pub const FOUR: Self = DecimalU64::new(4 * S::SCALE_FACTOR);
+    pub const FIVE: Self = DecimalU64::new(5 * S::SCALE_FACTOR);
+    pub const SIX: Self = DecimalU64::new(6 * S::SCALE_FACTOR);
+    pub const SEVEN: Self = DecimalU64::new(7 * S::SCALE_FACTOR);
+    pub const EIGHT: Self = DecimalU64::new(8 * S::SCALE_FACTOR);
+    pub const NINE: Self = DecimalU64::new(9 * S::SCALE_FACTOR);
+    pub const TEN: Self = DecimalU64::new(10 * S::SCALE_FACTOR);
+    pub const MAX: Self = DecimalU64::new(u64::MAX);
 
     /// Rescales this decimal to a different scale **without checking for overflow
     /// or precision loss**.
@@ -150,11 +141,11 @@ impl<S: ScaleMetrics> DecimalU64<S> {
         if T::SCALE >= S::SCALE {
             // Upscale: multiply
             let factor = 10u64.pow((T::SCALE - S::SCALE) as u32);
-            DecimalU64::<T>::from_raw(self.unscaled.saturating_mul(factor))
+            DecimalU64::<T>::new(self.0.saturating_mul(factor))
         } else {
             // Downscale: divide (truncate)
             let factor = 10u64.pow((S::SCALE - T::SCALE) as u32);
-            DecimalU64::<T>::from_raw(self.unscaled / factor)
+            DecimalU64::<T>::new(self.0 / factor)
         }
     }
 
@@ -177,30 +168,30 @@ impl<S: ScaleMetrics> DecimalU64<S> {
                 Error::Overflow(format!("unable to upscale {} from {} to {}", self, S::SCALE, T::SCALE))
             })?;
 
-            let unscaled = self.unscaled.checked_mul(factor).ok_or_else(|| {
+            let unscaled = self.0.checked_mul(factor).ok_or_else(|| {
                 Error::Overflow(format!("unable to upscale {} from {} to {}", self, S::SCALE, T::SCALE))
             })?;
 
-            Ok(DecimalU64::<T>::from_raw(unscaled))
+            Ok(DecimalU64::<T>::new(unscaled))
         } else {
             // Downscale
             let factor = 10u64.checked_pow((S::SCALE - T::SCALE) as u32).ok_or_else(|| {
                 Error::Overflow(format!("unable to downscale {} from {} to {}", self, S::SCALE, T::SCALE))
             })?;
 
-            let truncated = self.unscaled / factor;
-            let remainder = self.unscaled % factor;
+            let truncated = self.0 / factor;
+            let remainder = self.0 % factor;
 
             if remainder != 0 {
                 // Precision loss occurred
                 Err(Error::PrecisionLoss(format!(
                     "Truncated {} fractional digits when rescaling {} -> {}",
                     S::SCALE - T::SCALE,
-                    self.unscaled,
+                    self.0,
                     truncated
                 )))
             } else {
-                Ok(DecimalU64::<T>::from_raw(truncated))
+                Ok(DecimalU64::<T>::new(truncated))
             }
         }
     }
@@ -219,8 +210,8 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     /// ```
     #[inline]
     pub const fn split(&self) -> (u64, u64) {
-        let integer_part = self.unscaled / S::SCALE_FACTOR;
-        let fractional_part = self.unscaled % S::SCALE_FACTOR;
+        let integer_part = self.0 / S::SCALE_FACTOR;
+        let fractional_part = self.0 % S::SCALE_FACTOR;
         (integer_part, fractional_part)
     }
 
@@ -307,76 +298,76 @@ mod tests {
 
     #[test]
     fn should_parse_from_bytes() -> anyhow::Result<()> {
-        assert_eq!(18446744073709551615, DecimalU64::<U0>::try_from("18446744073709551615".as_bytes())?.unscaled);
-        assert_eq!(18446744073709551615, DecimalU64::<U8>::try_from("184467440737.09551615".as_bytes())?.unscaled);
-        assert_eq!(12345000000, DecimalU64::<U8>::try_from("123.45000000".as_bytes())?.unscaled);
-        assert_eq!(12300000000, DecimalU64::<U8>::try_from("123".as_bytes())?.unscaled);
-        assert_eq!(12300000000, DecimalU64::<U8>::try_from("123.".as_bytes())?.unscaled);
-        assert_eq!(12300000000, DecimalU64::<U8>::try_from("123.0".as_bytes())?.unscaled);
-        assert_eq!(18446744073709551615, DecimalU64::<U8>::try_from("184467440737.09551615".as_bytes())?.unscaled);
-        assert_eq!(0, DecimalU64::<U8>::try_from("0.0".as_bytes())?.unscaled);
-        assert_eq!(0, DecimalU64::<U8>::try_from("0".as_bytes())?.unscaled);
+        assert_eq!(18446744073709551615, DecimalU64::<U0>::from_str("18446744073709551615")?.0);
+        assert_eq!(18446744073709551615, DecimalU64::<U8>::from_str("184467440737.09551615")?.0);
+        assert_eq!(12345000000, DecimalU64::<U8>::from_str("123.45000000")?.0);
+        assert_eq!(12300000000, DecimalU64::<U8>::from_str("123")?.0);
+        assert_eq!(12300000000, DecimalU64::<U8>::from_str("123.")?.0);
+        assert_eq!(12300000000, DecimalU64::<U8>::from_str("123.0")?.0);
+        assert_eq!(18446744073709551615, DecimalU64::<U8>::from_str("184467440737.09551615")?.0);
+        assert_eq!(0, DecimalU64::<U8>::from_str("0.0")?.0);
+        assert_eq!(0, DecimalU64::<U8>::from_str("0")?.0);
         Ok(())
     }
 
     #[test]
     fn should_use_target_scale() -> anyhow::Result<()> {
-        assert_eq!(12345600000, DecimalU64::<U8>::try_from("123.456".as_bytes())?.unscaled);
-        assert_eq!(1234560000, DecimalU64::<U7>::try_from("123.456".as_bytes())?.unscaled);
-        assert_eq!(123456000, DecimalU64::<U6>::try_from("123.456".as_bytes())?.unscaled);
-        assert_eq!(12345600, DecimalU64::<U5>::try_from("123.456".as_bytes())?.unscaled);
-        assert_eq!(1234560, DecimalU64::<U4>::try_from("123.456".as_bytes())?.unscaled);
-        assert_eq!(123456, DecimalU64::<U3>::try_from("123.456".as_bytes())?.unscaled);
-        assert!(DecimalU64::<U2>::try_from("123.456".as_bytes()).is_err());
-        assert!(DecimalU64::<U1>::try_from("123.456".as_bytes()).is_err());
-        assert!(DecimalU64::<U0>::try_from("123.456".as_bytes()).is_err());
+        assert_eq!(12345600000, DecimalU64::<U8>::from_str("123.456")?.0);
+        assert_eq!(1234560000, DecimalU64::<U7>::from_str("123.456")?.0);
+        assert_eq!(123456000, DecimalU64::<U6>::from_str("123.456")?.0);
+        assert_eq!(12345600, DecimalU64::<U5>::from_str("123.456")?.0);
+        assert_eq!(1234560, DecimalU64::<U4>::from_str("123.456")?.0);
+        assert_eq!(123456, DecimalU64::<U3>::from_str("123.456")?.0);
+        assert!(DecimalU64::<U2>::from_str("123.456").is_err());
+        assert!(DecimalU64::<U1>::from_str("123.456").is_err());
+        assert!(DecimalU64::<U0>::from_str("123.456").is_err());
         Ok(())
     }
 
     #[test]
     fn should_split() -> anyhow::Result<()> {
-        assert_eq!((123, 45000000), DecimalU64::<U8>::try_from("123.45000000".as_bytes())?.split());
-        assert_eq!((0, 45000000), DecimalU64::<U8>::try_from("0.45000000".as_bytes())?.split());
-        assert_eq!((0, 0), DecimalU64::<U8>::try_from("0.0".as_bytes())?.split());
-        assert_eq!((123, 45000001), DecimalU64::<U8>::try_from("123.45000001".as_bytes())?.split());
-        assert_eq!((123, 45100000), DecimalU64::<U8>::try_from("123.451".as_bytes())?.split());
+        assert_eq!((123, 45000000), DecimalU64::<U8>::from_str("123.45000000")?.split());
+        assert_eq!((0, 45000000), DecimalU64::<U8>::from_str("0.45000000")?.split());
+        assert_eq!((0, 0), DecimalU64::<U8>::from_str("0.0")?.split());
+        assert_eq!((123, 45000001), DecimalU64::<U8>::from_str("123.45000001")?.split());
+        assert_eq!((123, 45100000), DecimalU64::<U8>::from_str("123.451")?.split());
         Ok(())
     }
 
     #[test]
     fn should_compare_for_eq() -> anyhow::Result<()> {
-        let one = DecimalU64::<U8>::try_from("123.45000000".as_bytes())?;
-        let two = DecimalU64::<U8>::try_from("123.45000000".as_bytes())?;
+        let one = DecimalU64::<U8>::from_str("123.45000000")?;
+        let two = DecimalU64::<U8>::from_str("123.45000000")?;
         assert_eq!(one, two);
-        let one = DecimalU64::<U8>::try_from("123.45000000".as_bytes())?;
-        let two = DecimalU64::<U8>::try_from("123.45000001".as_bytes())?;
+        let one = DecimalU64::<U8>::from_str("123.45000000")?;
+        let two = DecimalU64::<U8>::from_str("123.45000001")?;
         assert_ne!(one, two);
-        let one = DecimalU64::<U8>::try_from("0.0".as_bytes())?;
-        let two = DecimalU64::<U8>::try_from("0.0".as_bytes())?;
+        let one = DecimalU64::<U8>::from_str("0.0")?;
+        let two = DecimalU64::<U8>::from_str("0.0")?;
         assert_eq!(one, two);
         Ok(())
     }
 
     #[test]
     fn should_compare_for_ord() -> anyhow::Result<()> {
-        let one = DecimalU64::<U8>::try_from("123.45000001".as_bytes())?;
-        let two = DecimalU64::<U8>::try_from("123.45000000".as_bytes())?;
+        let one = DecimalU64::<U8>::from_str("123.45000001")?;
+        let two = DecimalU64::<U8>::from_str("123.45000000")?;
         assert!(one > two);
-        let one = DecimalU64::<U8>::try_from("123.45000000".as_bytes())?;
-        let two = DecimalU64::<U8>::try_from("123.45000001".as_bytes())?;
+        let one = DecimalU64::<U8>::from_str("123.45000000")?;
+        let two = DecimalU64::<U8>::from_str("123.45000001")?;
         assert!(one < two);
-        let one = DecimalU64::<U8>::try_from("0.0".as_bytes())?;
-        let two = DecimalU64::<U8>::try_from("0.0".as_bytes())?;
+        let one = DecimalU64::<U8>::from_str("0.0")?;
+        let two = DecimalU64::<U8>::from_str("0.0")?;
         assert!(one >= two);
-        let one = DecimalU64::<U8>::try_from("0.0".as_bytes())?;
-        let two = DecimalU64::<U8>::try_from("0.0".as_bytes())?;
+        let one = DecimalU64::<U8>::from_str("0.0")?;
+        let two = DecimalU64::<U8>::from_str("0.0")?;
         assert!(one <= two);
         Ok(())
     }
 
     #[test]
     fn should_err_if_number_too_large() {
-        let err = DecimalU64::<U8>::try_from("184467440737.09551616".as_bytes());
+        let err = DecimalU64::<U8>::from_str("184467440737.09551616");
         assert!(err.is_err());
         if let Err(err) = err {
             assert_eq!("overflow: 184467440737.09551616", err.to_string());
@@ -385,7 +376,7 @@ mod tests {
 
     #[test]
     fn should_create_from_str() {
-        assert_eq!(12345000001, DecimalU64::<U8>::from_str("123.45000001").unwrap().unscaled);
+        assert_eq!(12345000001, DecimalU64::<U8>::from_str("123.45000001").unwrap().0);
     }
 
     #[test]
@@ -441,9 +432,9 @@ mod tests {
 
     #[test]
     fn should_create_from_raw() {
-        assert_eq!("0.00000123", DecimalU64::<U8>::from_raw(123).to_string());
-        assert_eq!("0.0000123", DecimalU64::<U7>::from_raw(123).to_string());
-        assert_eq!("123", DecimalU64::<U0>::from_raw(123).to_string());
+        assert_eq!("0.00000123", DecimalU64::<U8>::new(123).to_string());
+        assert_eq!("0.0000123", DecimalU64::<U7>::new(123).to_string());
+        assert_eq!("123", DecimalU64::<U0>::new(123).to_string());
     }
 
     #[test]

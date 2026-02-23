@@ -10,8 +10,8 @@ pub struct HalfUp;
 impl RoundingPolicy for HalfUp {
     #[inline]
     fn round<S: ScaleMetrics + Copy>(value: DecimalU64<S>, tick_size: DecimalU64<S>) -> DecimalU64<S> {
-        let half_tick = tick_size.unscaled / 2 + (tick_size.unscaled % 2);
-        DecimalU64::from_raw(((value.unscaled + half_tick) / tick_size.unscaled) * tick_size.unscaled)
+        let half_tick = tick_size.0 / 2 + (tick_size.0 % 2);
+        DecimalU64::new(((value.0 + half_tick) / tick_size.0) * tick_size.0)
     }
 }
 
@@ -21,7 +21,7 @@ pub struct Floor;
 impl RoundingPolicy for Floor {
     #[inline]
     fn round<S: ScaleMetrics + Copy>(value: DecimalU64<S>, tick_size: DecimalU64<S>) -> DecimalU64<S> {
-        DecimalU64::from_raw((value.unscaled / tick_size.unscaled) * tick_size.unscaled)
+        DecimalU64::new((value.0 / tick_size.0) * tick_size.0)
     }
 }
 
@@ -31,7 +31,7 @@ pub struct Ceil;
 impl RoundingPolicy for Ceil {
     #[allow(clippy::manual_div_ceil)]
     fn round<S: ScaleMetrics + Copy>(value: DecimalU64<S>, tick_size: DecimalU64<S>) -> DecimalU64<S> {
-        DecimalU64::from_raw(((value.unscaled + tick_size.unscaled - 1) / tick_size.unscaled) * tick_size.unscaled)
+        DecimalU64::new(((value.0 + tick_size.0 - 1) / tick_size.0) * tick_size.0)
     }
 }
 

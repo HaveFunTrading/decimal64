@@ -7,9 +7,9 @@ impl<S: ScaleMetrics> Mul for DecimalU64<S> {
 
     #[inline]
     fn mul(self, rhs: Self) -> Self::Output {
-        let product = self.unscaled as u128 * rhs.unscaled as u128;
+        let product = self.0 as u128 * rhs.0 as u128;
         let scale_factor = S::SCALE_FACTOR as u128;
-        Self::from_raw((product / scale_factor) as u64)
+        Self::new((product / scale_factor) as u64)
     }
 }
 
@@ -18,8 +18,8 @@ impl<S: ScaleMetrics> Add for DecimalU64<S> {
 
     #[inline]
     fn add(self, rhs: Self) -> Self::Output {
-        let sum = self.unscaled + rhs.unscaled;
-        Self::from_raw(sum)
+        let sum = self.0 + rhs.0;
+        Self::new(sum)
     }
 }
 
@@ -28,8 +28,8 @@ impl<S: ScaleMetrics> Sub for DecimalU64<S> {
 
     #[inline]
     fn sub(self, rhs: Self) -> Self::Output {
-        let diff = self.unscaled - rhs.unscaled;
-        Self::from_raw(diff)
+        let diff = self.0 - rhs.0;
+        Self::new(diff)
     }
 }
 
@@ -38,46 +38,46 @@ impl<S: ScaleMetrics> Div for DecimalU64<S> {
 
     #[inline]
     fn div(self, rhs: Self) -> Self::Output {
-        if rhs.unscaled == 0 {
+        if rhs.0 == 0 {
             panic!("Division by zero");
         }
-        let dividend = self.unscaled as u128 * S::SCALE_FACTOR as u128;
-        let quotient = dividend / (rhs.unscaled as u128);
-        Self::from_raw(quotient as u64)
+        let dividend = self.0 as u128 * S::SCALE_FACTOR as u128;
+        let quotient = dividend / (rhs.0 as u128);
+        Self::new(quotient as u64)
     }
 }
 
 impl<S: ScaleMetrics> AddAssign for DecimalU64<S> {
     #[inline]
     fn add_assign(&mut self, rhs: DecimalU64<S>) {
-        self.unscaled += rhs.unscaled;
+        self.0 += rhs.0;
     }
 }
 
 impl<'a, S: ScaleMetrics> AddAssign<&'a DecimalU64<S>> for DecimalU64<S> {
     fn add_assign(&mut self, rhs: &'a DecimalU64<S>) {
-        self.unscaled += rhs.unscaled;
+        self.0 += rhs.0;
     }
 }
 
 impl<S: ScaleMetrics> AddAssign<DecimalU64<S>> for &mut DecimalU64<S> {
     #[inline]
     fn add_assign(&mut self, rhs: DecimalU64<S>) {
-        self.unscaled += rhs.unscaled;
+        self.0 += rhs.0;
     }
 }
 
 impl<'a, S: ScaleMetrics> AddAssign<&'a DecimalU64<S>> for &'a mut DecimalU64<S> {
     #[inline]
     fn add_assign(&mut self, rhs: &'a DecimalU64<S>) {
-        self.unscaled += rhs.unscaled;
+        self.0 += rhs.0;
     }
 }
 
 impl<S: ScaleMetrics> SubAssign for DecimalU64<S> {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
-        self.unscaled -= rhs.unscaled;
+        self.0 -= rhs.0;
     }
 }
 
@@ -108,7 +108,7 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     #[inline]
     pub fn checked_mul(self, other: Self) -> Option<Self> {
         // multiply in u128 to avoid overflow in the intermediate product
-        let product = (self.unscaled as u128).checked_mul(other.unscaled as u128)?;
+        let product = (self.0 as u128).checked_mul(other.0 as u128)?;
 
         // divide by the scale factor to maintain the same scale
         let scale_factor = S::SCALE_FACTOR as u128;
@@ -118,37 +118,37 @@ impl<S: ScaleMetrics> DecimalU64<S> {
         if result > u64::MAX as u128 {
             None
         } else {
-            Some(Self::from_raw(result as u64))
+            Some(Self::new(result as u64))
         }
     }
 
     /// Add two decimals with the same scale.
     #[inline]
     pub fn checked_add(self, other: Self) -> Option<Self> {
-        let sum = self.unscaled.checked_add(other.unscaled)?;
-        Some(Self::from_raw(sum))
+        let sum = self.0.checked_add(other.0)?;
+        Some(Self::new(sum))
     }
 
     /// Subtract one decimal from another. Returns an error if underflow occurs.
     #[inline]
     pub fn checked_sub(self, other: Self) -> Option<Self> {
-        let diff = self.unscaled.checked_sub(other.unscaled)?;
-        Some(Self::from_raw(diff))
+        let diff = self.0.checked_sub(other.0)?;
+        Some(Self::new(diff))
     }
 
     /// Divide one decimal by another using 128-bit arithmetic for the intermediate computation.
     /// The result is computed as (self.unscaled * SCALE_FACTOR) / other.unscaled.
     #[inline]
     pub fn checked_div(self, other: Self) -> Option<Self> {
-        if other.unscaled == 0 {
+        if other.0 == 0 {
             return None;
         }
-        let dividend = (self.unscaled as u128).checked_mul(S::SCALE_FACTOR as u128)?;
-        let quotient = dividend / (other.unscaled as u128);
+        let dividend = (self.0 as u128).checked_mul(S::SCALE_FACTOR as u128)?;
+        let quotient = dividend / (other.0 as u128);
         if quotient > u64::MAX as u128 {
             None
         } else {
-            Some(Self::from_raw(quotient as u64))
+            Some(Self::new(quotient as u64))
         }
     }
 }
