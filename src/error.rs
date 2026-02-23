@@ -18,4 +18,6 @@ pub enum InvalidInputKind {
     NegativeNumber,
     #[error("infinite number")]
     InfiniteNumber,
+    #[error("value less than one")]
+    LessThanOne,
 }

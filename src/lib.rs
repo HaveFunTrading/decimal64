@@ -8,6 +8,7 @@ mod macros;
 pub mod round;
 #[cfg(feature = "serde")]
 pub mod serde;
+pub mod math;
 
 pub trait ScaleMetrics {
     const SCALE: u8;

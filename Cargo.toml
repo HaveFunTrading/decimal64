@@ -41,3 +41,8 @@ harness = false
 name = "f64"
 path = "benches/f64.rs"
 harness = false
+
+[[bench]]
+name = "math"
+path = "benches/math.rs"
+harness = false
