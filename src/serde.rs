@@ -3,7 +3,6 @@ use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::fmt;
 use std::marker::PhantomData;
-use std::str::FromStr;
 
 impl<SM: ScaleMetrics> Serialize for DecimalU64<SM> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

@@ -62,8 +62,17 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     pub const TEN: Self = DecimalU64::new(10 * S::SCALE_FACTOR);
     pub const MAX: Self = DecimalU64::new(u64::MAX);
 
+    /// Parses a decimal from an ASCII byte slice.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use decimal64::{DecimalU64, U2};
+    ///
+    /// let value = DecimalU64::<U2>::from_slice(b"12.34").unwrap();
+    /// assert_eq!("12.34", value.to_string());
+    /// ```
     #[inline]
-    pub const fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+    pub const fn from_slice(bytes: &[u8]) -> Result<Self, Error> {
         let mut unscaled: u64 = 0;
         let mut fractional_part_flag: u8 = 0;
         let mut scale_counter: u8 = 0;
@@ -105,17 +114,52 @@ impl<S: ScaleMetrics> DecimalU64<S> {
         Ok(Self(unscaled, PhantomData))
     }
 
+    /// Parses a decimal from a UTF-8 string slice.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use decimal64::{DecimalU64, U2};
+    ///
+    /// let value = DecimalU64::<U2>::from_str("12.34").unwrap();
+    /// assert_eq!("12.34", value.to_string());
+    /// ```
     pub const fn from_str(s: &str) -> Result<Self, Error> {
-        Self::from_bytes(s.as_bytes())
+        Self::from_slice(s.as_bytes())
     }
 
     /// Converts this decimal to `f64`.
+    ///
+    /// ## Examples
+    /// ```no_run
+    /// use std::str::FromStr;
+    /// use decimal64::{DecimalU64, U2};
+    ///
+    /// let value = DecimalU64::<U2>::from_str("12.34").unwrap();
+    /// assert_eq!(12.34, value.to_f64());
+    /// ```
     pub const fn to_f64(self) -> f64 {
         self.0 as f64 / S::SCALE_FACTOR as f64
     }
 
     /// Creates a decimal from `f64`, rounding half-up at the target scale.
-    /// Returns an error on invalid input or overflow.
+    /// Returns error on invalid input or overflow.
+    ///
+    /// ## Examples
+    /// No rounding.
+    /// ```no_run
+    /// use decimal64::{DecimalU64, U3};
+    ///
+    /// let value = DecimalU64::<U3>::from_f64(12.345).unwrap();
+    /// assert_eq!("12.345", value.to_string());
+    /// ```
+    ///
+    /// With rounding.
+    /// ```no_run
+    /// use decimal64::{DecimalU64, U2};
+    ///
+    /// let value = DecimalU64::<U2>::from_f64(12.345).unwrap();
+    /// assert_eq!("12.35", value.to_string());
+    /// ```
     pub const fn from_f64(value: f64) -> Result<Self, Error> {
         const EXP_BITS: u64 = 0x7ff;
         const EXP_BIAS: i32 = 1023;
@@ -192,7 +236,7 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     /// - The resulting value is a valid `DecimalU64<T>`
     /// - Any precision loss caused by downscaling is acceptable
     ///
-    /// # Example
+    /// ## Examples
     /// No precision loss.
     /// ```no_run
     /// use std::str::FromStr;
@@ -663,7 +707,6 @@ mod rescale_tests {
     use crate::error::Error;
     use crate::{DecimalU64, ScaleMetrics, U0, U1, U2, U3, U4, U5, U7, U8};
     use rstest_macros::rstest;
-    use std::str::FromStr;
 
     // Generic rescale test for checked rescale (exact)
     fn rescale<S1: ScaleMetrics, S2: ScaleMetrics>(s: &'static str) {

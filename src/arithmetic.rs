@@ -158,7 +158,6 @@ mod tests {
     mod mul {
         use crate::{DecimalU64, U8};
         use rstest_macros::rstest;
-        use std::str::FromStr;
 
         #[rstest]
         #[case("0.2", "50000", "10000.00000000")]
@@ -185,7 +184,6 @@ mod tests {
     mod add {
         use crate::{DecimalU64, U8};
         use rstest_macros::rstest;
-        use std::str::FromStr;
 
         #[rstest]
         #[case("0.2", "50000", "50000.20000000")]
@@ -216,7 +214,6 @@ mod tests {
     mod sub {
         use crate::{DecimalU64, U8};
         use rstest_macros::rstest;
-        use std::str::FromStr;
 
         #[rstest]
         #[case("50000", "0.2", "49999.80000000")]
@@ -242,7 +239,6 @@ mod tests {
     mod div {
         use crate::{DecimalU64, U8};
         use rstest_macros::rstest;
-        use std::str::FromStr;
 
         #[rstest]
         #[case("50000", "0.2", "250000.00000000")]
@@ -285,7 +281,6 @@ mod tests {
 
     mod assign {
         use crate::{DecimalU64, U8};
-        use std::str::FromStr;
 
         #[test]
         fn should_add_and_sub_assign() {

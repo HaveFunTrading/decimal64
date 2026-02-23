@@ -46,7 +46,6 @@ mod tests {
     use super::*;
     use crate::U8;
     use rstest_macros::rstest;
-    use std::str::FromStr;
 
     #[rstest]
     #[case("300.00", "0.1", "300.00000000")]

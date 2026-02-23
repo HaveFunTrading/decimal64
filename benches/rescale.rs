@@ -1,6 +1,5 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use decimal64::{DecimalU64, U2, U8};
-use std::str::FromStr;
 
 fn rescale_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("decimal64_rescale");
