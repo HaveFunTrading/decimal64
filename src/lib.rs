@@ -1,7 +1,6 @@
 use crate::error::{Error, InvalidInputKind};
 use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
-use std::str::FromStr;
 
 mod arithmetic;
 pub mod error;
@@ -33,78 +32,6 @@ const POW5_U128: [u128; 9] = [1, 5, 25, 125, 625, 3125, 15625, 78125, 390625];
 #[repr(transparent)]
 pub struct DecimalU64<S>(pub u64, PhantomData<S>);
 
-impl<S: ScaleMetrics> FromStr for DecimalU64<S> {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::try_from(s.as_bytes())
-    }
-}
-
-impl<S: ScaleMetrics> TryFrom<&[u8]> for DecimalU64<S> {
-    type Error = Error;
-
-    #[inline]
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        let mut unscaled: u64 = 0;
-        let mut fractional_part_flag = 0;
-        let mut scale_counter = 0;
-
-        for &byte in bytes {
-            match byte {
-                b'0'..=b'9' => {
-                    unscaled = (unscaled * 10)
-                        .checked_add((byte - b'0') as u64)
-                        .ok_or(Error::Overflow)?;
-
-                    scale_counter += fractional_part_flag;
-                }
-                b'.' => fractional_part_flag = 1,
-                other => return Err(Error::InvalidInput(InvalidInputKind::InvalidCharacter(other as char))),
-            }
-        }
-
-        let unscaled = unscaled
-            .checked_mul(*unsafe {
-                SCALE_FACTORS.get_unchecked(S::SCALE.checked_sub(scale_counter).ok_or(Error::Overflow)? as usize)
-            })
-            .ok_or(Error::Overflow)?;
-
-        Ok(Self(unscaled, PhantomData))
-    }
-}
-
-// impl<S: ScaleMetrics> DecimalU64<S> {
-//     #[inline]
-//     const fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-//         let mut unscaled: u64 = 0;
-//         let mut fractional_part_flag = 0;
-//         let mut scale_counter = 0;
-//
-//         for &byte in bytes {
-//             match byte {
-//                 b'0'..=b'9' => {
-//                     unscaled = (unscaled * 10)
-//                         .checked_add((byte - b'0') as u64)
-//                         .ok_or(Error::Overflow)?;
-//
-//                     scale_counter += fractional_part_flag;
-//                 }
-//                 b'.' => fractional_part_flag = 1,
-//                 other => return Err(Error::InvalidInput(InvalidInputKind::InvalidCharacter(other as char))),
-//             }
-//         }
-//
-//         let unscaled = unscaled
-//             .checked_mul(*unsafe {
-//                 SCALE_FACTORS.get_unchecked(S::SCALE.checked_sub(scale_counter).ok_or(Error::Overflow)? as usize)
-//             })
-//             .ok_or(Error::Overflow)?;
-//
-//         Ok(Self(unscaled, PhantomData))
-//     }
-// }
-
 impl<S: ScaleMetrics> Display for DecimalU64<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         // A buffer large enough for our formatted value.
@@ -134,6 +61,53 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     pub const NINE: Self = DecimalU64::new(9 * S::SCALE_FACTOR);
     pub const TEN: Self = DecimalU64::new(10 * S::SCALE_FACTOR);
     pub const MAX: Self = DecimalU64::new(u64::MAX);
+
+    #[inline]
+    pub const fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        let mut unscaled: u64 = 0;
+        let mut fractional_part_flag: u8 = 0;
+        let mut scale_counter: u8 = 0;
+        let mut index: usize = 0;
+
+        while index < bytes.len() {
+            let byte = bytes[index];
+            match byte {
+                b'0'..=b'9' => {
+                    let next = match unscaled.checked_mul(10) {
+                        Some(value) => value,
+                        None => return Err(Error::Overflow),
+                    };
+                    let digit = (byte - b'0') as u64;
+                    unscaled = match next.checked_add(digit) {
+                        Some(value) => value,
+                        None => return Err(Error::Overflow),
+                    };
+
+                    scale_counter += fractional_part_flag;
+                }
+                b'.' => fractional_part_flag = 1,
+                other => return Err(Error::InvalidInput(InvalidInputKind::InvalidCharacter(other as char))),
+            }
+
+            index += 1;
+        }
+
+        let remaining_scale = match S::SCALE.checked_sub(scale_counter) {
+            Some(remaining_scale) => remaining_scale,
+            None => return Err(Error::Overflow),
+        };
+        let factor = SCALE_FACTORS[remaining_scale as usize];
+        let unscaled = match unscaled.checked_mul(factor) {
+            Some(unscaled) => unscaled,
+            None => return Err(Error::Overflow),
+        };
+
+        Ok(Self(unscaled, PhantomData))
+    }
+
+    pub const fn from_str(s: &str) -> Result<Self, Error> {
+        Self::from_bytes(s.as_bytes())
+    }
 
     /// Converts this decimal to `f64`.
     pub const fn to_f64(self) -> f64 {
