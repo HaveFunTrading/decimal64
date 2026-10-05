@@ -10,7 +10,7 @@ pub struct HalfUp;
 impl RoundingPolicy for HalfUp {
     #[inline]
     fn round<S: ScaleMetrics + Copy>(value: DecimalU64<S>, tick_size: DecimalU64<S>) -> DecimalU64<S> {
-        let half_tick = tick_size.0 / 2 + (tick_size.0 % 2);
+        let half_tick = tick_size.0 / 2;
         DecimalU64::new(((value.0 + half_tick) / tick_size.0) * tick_size.0)
     }
 }
@@ -57,12 +57,19 @@ mod tests {
     #[case("0.0543", "0.1", "0.10000000")]
     #[case("0.0443", "0.1", "0.00000000")]
     #[case("1.0443", "0.1", "1.00000000")]
+    #[case("1.01", "0.01", "1.01000000")]
+    #[case("1.02", "0.01", "1.02000000")]
     #[case("1.0543", "0.01", "1.05000000")]
     #[case("1.0563", "0.01", "1.06000000")]
     #[case("1.0543", "0.05", "1.05000000")]
     #[case("1.0563", "0.05", "1.05000000")]
     #[case("1.0666", "0.05", "1.05000000")]
     #[case("1.075", "0.05", "1.10000000")]
+    // Odd unscaled tick: there is no exactly representable halfway value.
+    #[case("0.00000002", "0.00000005", "0.00000000")]
+    #[case("0.00000003", "0.00000005", "0.00000005")]
+    #[case("0.00000007", "0.00000005", "0.00000005")]
+    #[case("0.00000008", "0.00000005", "0.00000010")]
     fn should_round_using_round_half_up(#[case] value: &str, #[case] tick_size: &str, #[case] expected: &str) {
         assert_eq!(
             expected,
