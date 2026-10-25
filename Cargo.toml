@@ -49,11 +49,6 @@ path = "benches/f64.rs"
 harness = false
 
 [[bench]]
-name = "math"
-path = "benches/math.rs"
-harness = false
-
-[[bench]]
 name = "rescale"
 path = "benches/rescale.rs"
 harness = false

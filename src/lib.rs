@@ -6,7 +6,6 @@ use std::marker::PhantomData;
 mod arithmetic;
 pub mod error;
 mod macros;
-pub mod math;
 pub mod round;
 #[cfg(feature = "serde")]
 pub mod serde;

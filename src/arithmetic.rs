@@ -102,19 +102,38 @@ impl<'a, S: ScaleMetrics> Sum<&'a DecimalU64<S>> for DecimalU64<S> {
 }
 
 impl<S: ScaleMetrics> DecimalU64<S> {
-    /// Multiply two decimals with the same scale.
-    /// This performs the multiplication in u128 and then scales the result down by dividing by `S::SCALE_FACTOR`.
-    /// It returns an error if an overflow occurs.
+    /// Checked fixed-point addition.
+    ///
+    /// Returns `None` if the result cannot be represented by `Self`.
+    #[must_use]
     #[inline]
-    pub fn checked_mul(self, other: Self) -> Option<Self> {
-        // multiply in u128 to avoid overflow in the intermediate product
-        let product = (self.0 as u128).checked_mul(other.0 as u128)?;
+    pub const fn checked_add(self, rhs: Self) -> Option<Self> {
+        match self.0.checked_add(rhs.0) {
+            Some(sum) => Some(Self::new(sum)),
+            None => None,
+        }
+    }
 
-        // divide by the scale factor to maintain the same scale
-        let scale_factor = S::SCALE_FACTOR as u128;
-        let result = product / scale_factor;
+    /// Checked fixed-point subtraction.
+    ///
+    /// Returns `None` if the result would be negative.
+    #[must_use]
+    #[inline]
+    pub const fn checked_sub(self, rhs: Self) -> Option<Self> {
+        match self.0.checked_sub(rhs.0) {
+            Some(diff) => Some(Self::new(diff)),
+            None => None,
+        }
+    }
 
-        // ensure the result fits back into a u64
+    /// Checked fixed-point multiplication.
+    ///
+    /// The result is truncated toward zero at the scale of `Self`. Returns `None` if
+    /// the scaled result cannot be represented by `Self`.
+    #[must_use]
+    #[inline]
+    pub const fn checked_mul(self, rhs: Self) -> Option<Self> {
+        let result = self.wide_mul(rhs);
         if result > u64::MAX as u128 {
             None
         } else {
@@ -122,39 +141,318 @@ impl<S: ScaleMetrics> DecimalU64<S> {
         }
     }
 
-    /// Add two decimals with the same scale.
+    /// Checked fixed-point division.
+    ///
+    /// The result is truncated toward zero at the scale of `Self`. Returns `None` if
+    /// `rhs` is zero or if the scaled result cannot be represented by `Self`.
+    #[must_use]
     #[inline]
-    pub fn checked_add(self, other: Self) -> Option<Self> {
-        let sum = self.0.checked_add(other.0)?;
-        Some(Self::new(sum))
-    }
-
-    /// Subtract one decimal from another. Returns an error if underflow occurs.
-    #[inline]
-    pub fn checked_sub(self, other: Self) -> Option<Self> {
-        let diff = self.0.checked_sub(other.0)?;
-        Some(Self::new(diff))
-    }
-
-    /// Divide one decimal by another using 128-bit arithmetic for the intermediate computation.
-    /// The result is computed as (self.unscaled * SCALE_FACTOR) / other.unscaled.
-    #[inline]
-    pub fn checked_div(self, other: Self) -> Option<Self> {
-        if other.0 == 0 {
+    pub const fn checked_div(self, rhs: Self) -> Option<Self> {
+        if rhs.0 == 0 {
             return None;
         }
-        let dividend = (self.0 as u128).checked_mul(S::SCALE_FACTOR as u128)?;
-        let quotient = dividend / (other.0 as u128);
-        if quotient > u64::MAX as u128 {
+        let result = self.wide_div(rhs);
+        if result > u64::MAX as u128 {
             None
         } else {
-            Some(Self::new(quotient as u64))
+            Some(Self::new(result as u64))
         }
+    }
+
+    /// Saturating fixed-point addition.
+    #[must_use]
+    #[inline]
+    pub const fn saturating_add(self, rhs: Self) -> Self {
+        Self::new(self.0.saturating_add(rhs.0))
+    }
+
+    /// Saturating fixed-point subtraction.
+    #[must_use]
+    #[inline]
+    pub const fn saturating_sub(self, rhs: Self) -> Self {
+        Self::new(self.0.saturating_sub(rhs.0))
+    }
+
+    /// Saturating fixed-point multiplication.
+    ///
+    /// The result is truncated toward zero at the scale of `Self` and clamped to
+    /// [`Self::MAX`] if it is too large.
+    #[must_use]
+    #[inline]
+    pub const fn saturating_mul(self, rhs: Self) -> Self {
+        let result = self.wide_mul(rhs);
+        if result > u64::MAX as u128 {
+            Self::MAX
+        } else {
+            Self::new(result as u64)
+        }
+    }
+
+    /// Saturating fixed-point division.
+    ///
+    /// The result is truncated toward zero at the scale of `Self` and clamped to
+    /// [`Self::MAX`] if it is too large.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `rhs` is zero.
+    #[must_use]
+    #[inline]
+    pub const fn saturating_div(self, rhs: Self) -> Self {
+        if rhs.0 == 0 {
+            panic!("attempt to divide by zero");
+        }
+        let result = self.wide_div(rhs);
+        if result > u64::MAX as u128 {
+            Self::MAX
+        } else {
+            Self::new(result as u64)
+        }
+    }
+
+    /// Wrapping fixed-point addition.
+    #[must_use]
+    #[inline]
+    pub const fn wrapping_add(self, rhs: Self) -> Self {
+        Self::new(self.0.wrapping_add(rhs.0))
+    }
+
+    /// Wrapping fixed-point subtraction.
+    #[must_use]
+    #[inline]
+    pub const fn wrapping_sub(self, rhs: Self) -> Self {
+        Self::new(self.0.wrapping_sub(rhs.0))
+    }
+
+    /// Wrapping fixed-point multiplication.
+    ///
+    /// The result is truncated toward zero at the scale of `Self` and wrapped modulo
+    /// `2^64` if it is too large.
+    #[must_use]
+    #[inline]
+    pub const fn wrapping_mul(self, rhs: Self) -> Self {
+        Self::new(self.wide_mul(rhs) as u64)
+    }
+
+    /// Wrapping fixed-point division.
+    ///
+    /// The result is truncated toward zero at the scale of `Self` and wrapped modulo
+    /// `2^64` if it is too large.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `rhs` is zero.
+    #[must_use]
+    #[inline]
+    pub const fn wrapping_div(self, rhs: Self) -> Self {
+        if rhs.0 == 0 {
+            panic!("attempt to divide by zero");
+        }
+        Self::new(self.wide_div(rhs) as u64)
+    }
+
+    /// Overflowing fixed-point addition.
+    ///
+    /// Returns the wrapped result and whether overflow occurred.
+    #[must_use]
+    #[inline]
+    pub const fn overflowing_add(self, rhs: Self) -> (Self, bool) {
+        let (result, overflowed) = self.0.overflowing_add(rhs.0);
+        (Self::new(result), overflowed)
+    }
+
+    /// Overflowing fixed-point subtraction.
+    ///
+    /// Returns the wrapped result and whether the result would be negative.
+    #[must_use]
+    #[inline]
+    pub const fn overflowing_sub(self, rhs: Self) -> (Self, bool) {
+        let (result, overflowed) = self.0.overflowing_sub(rhs.0);
+        (Self::new(result), overflowed)
+    }
+
+    /// Overflowing fixed-point multiplication.
+    ///
+    /// The result is truncated toward zero at the scale of `Self`. Returns the result
+    /// wrapped modulo `2^64` and whether overflow occurred.
+    #[must_use]
+    #[inline]
+    pub const fn overflowing_mul(self, rhs: Self) -> (Self, bool) {
+        let result = self.wide_mul(rhs);
+        (Self::new(result as u64), result > u64::MAX as u128)
+    }
+
+    /// Overflowing fixed-point division.
+    ///
+    /// The result is truncated toward zero at the scale of `Self`. Returns the result
+    /// wrapped modulo `2^64` and whether overflow occurred.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `rhs` is zero.
+    #[must_use]
+    #[inline]
+    pub const fn overflowing_div(self, rhs: Self) -> (Self, bool) {
+        if rhs.0 == 0 {
+            panic!("attempt to divide by zero");
+        }
+        let result = self.wide_div(rhs);
+        (Self::new(result as u64), result > u64::MAX as u128)
+    }
+
+    #[inline]
+    const fn wide_mul(self, rhs: Self) -> u128 {
+        let product = self.0 as u128 * rhs.0 as u128;
+        product / S::SCALE_FACTOR as u128
+    }
+
+    #[inline]
+    const fn wide_div(self, rhs: Self) -> u128 {
+        let dividend = self.0 as u128 * S::SCALE_FACTOR as u128;
+        dividend / rhs.0 as u128
     }
 }
 
 #[cfg(test)]
 mod tests {
+    mod checked_const {
+        use crate::{DecimalU64, U2};
+
+        type Decimal = DecimalU64<U2>;
+
+        const ADD: Option<Decimal> = Decimal::ONE.checked_add(Decimal::TWO);
+        const ADD_OVERFLOW: Option<Decimal> = Decimal::MAX.checked_add(Decimal::new(1));
+        const SUB: Option<Decimal> = Decimal::TWO.checked_sub(Decimal::ONE);
+        const SUB_UNDERFLOW: Option<Decimal> = Decimal::ZERO.checked_sub(Decimal::new(1));
+        const MUL: Option<Decimal> = Decimal::TWO.checked_mul(Decimal::new(300));
+        const MUL_OVERFLOW: Option<Decimal> = Decimal::MAX.checked_mul(Decimal::TWO);
+        const DIV: Option<Decimal> = Decimal::new(600).checked_div(Decimal::TWO);
+        const DIV_BY_ZERO: Option<Decimal> = Decimal::ONE.checked_div(Decimal::ZERO);
+        const DIV_OVERFLOW: Option<Decimal> = Decimal::MAX.checked_div(Decimal::new(1));
+
+        #[test]
+        fn should_support_checked_arithmetic_in_const_contexts() {
+            assert_eq!(ADD, Some(Decimal::new(300)));
+            assert_eq!(ADD_OVERFLOW, None);
+            assert_eq!(SUB, Some(Decimal::ONE));
+            assert_eq!(SUB_UNDERFLOW, None);
+            assert_eq!(MUL, Some(Decimal::new(600)));
+            assert_eq!(MUL_OVERFLOW, None);
+            assert_eq!(DIV, Some(Decimal::new(300)));
+            assert_eq!(DIV_BY_ZERO, None);
+            assert_eq!(DIV_OVERFLOW, None);
+        }
+    }
+
+    mod operation_families {
+        use crate::{DecimalU64, U2};
+
+        type Decimal = DecimalU64<U2>;
+
+        const SATURATING_ADD: Decimal = Decimal::MAX.saturating_add(Decimal::new(1));
+        const SATURATING_SUB: Decimal = Decimal::ZERO.saturating_sub(Decimal::new(1));
+        const SATURATING_MUL: Decimal = Decimal::MAX.saturating_mul(Decimal::TWO);
+        const SATURATING_DIV: Decimal = Decimal::MAX.saturating_div(Decimal::new(1));
+
+        const WRAPPING_ADD: Decimal = Decimal::MAX.wrapping_add(Decimal::new(1));
+        const WRAPPING_SUB: Decimal = Decimal::ZERO.wrapping_sub(Decimal::new(1));
+        const WRAPPING_MUL: Decimal = Decimal::MAX.wrapping_mul(Decimal::TWO);
+        const WRAPPING_DIV: Decimal = Decimal::MAX.wrapping_div(Decimal::new(1));
+
+        const OVERFLOWING_ADD: (Decimal, bool) = Decimal::MAX.overflowing_add(Decimal::new(1));
+        const OVERFLOWING_SUB: (Decimal, bool) = Decimal::ZERO.overflowing_sub(Decimal::new(1));
+        const OVERFLOWING_MUL: (Decimal, bool) = Decimal::MAX.overflowing_mul(Decimal::TWO);
+        const OVERFLOWING_DIV: (Decimal, bool) = Decimal::MAX.overflowing_div(Decimal::new(1));
+
+        #[test]
+        fn should_saturate_at_numeric_bounds() {
+            assert_eq!(SATURATING_ADD, Decimal::MAX);
+            assert_eq!(SATURATING_SUB, Decimal::ZERO);
+            assert_eq!(SATURATING_MUL, Decimal::MAX);
+            assert_eq!(SATURATING_DIV, Decimal::MAX);
+        }
+
+        #[test]
+        fn should_wrap_at_numeric_bounds() {
+            assert_eq!(WRAPPING_ADD, Decimal::ZERO);
+            assert_eq!(WRAPPING_SUB, Decimal::MAX);
+            assert_eq!(WRAPPING_MUL, Decimal::new(u64::MAX - 1));
+            assert_eq!(WRAPPING_DIV, Decimal::new(u64::MAX - 99));
+        }
+
+        #[test]
+        fn should_report_overflow_and_return_wrapped_results() {
+            assert_eq!(OVERFLOWING_ADD, (Decimal::ZERO, true));
+            assert_eq!(OVERFLOWING_SUB, (Decimal::MAX, true));
+            assert_eq!(OVERFLOWING_MUL, (Decimal::new(u64::MAX - 1), true));
+            assert_eq!(OVERFLOWING_DIV, (Decimal::new(u64::MAX - 99), true));
+        }
+
+        #[test]
+        fn should_not_report_overflow_for_representable_results() {
+            assert_eq!(Decimal::ONE.overflowing_add(Decimal::TWO), (Decimal::THREE, false));
+            assert_eq!(Decimal::TWO.overflowing_sub(Decimal::ONE), (Decimal::ONE, false));
+            assert_eq!(Decimal::TWO.overflowing_mul(Decimal::THREE), (Decimal::SIX, false));
+            assert_eq!(Decimal::SIX.overflowing_div(Decimal::TWO), (Decimal::THREE, false));
+        }
+
+        #[test]
+        fn should_keep_operation_families_consistent() {
+            let values = [
+                Decimal::ZERO,
+                Decimal::new(1),
+                Decimal::new(99),
+                Decimal::ONE,
+                Decimal::new(u64::MAX / 2),
+                Decimal::MAX,
+            ];
+
+            for lhs in values {
+                for rhs in values {
+                    let (add, add_overflowed) = lhs.overflowing_add(rhs);
+                    assert_eq!(lhs.wrapping_add(rhs), add);
+                    assert_eq!(lhs.checked_add(rhs), (!add_overflowed).then_some(add));
+                    assert_eq!(lhs.saturating_add(rhs), if add_overflowed { Decimal::MAX } else { add });
+
+                    let (sub, sub_overflowed) = lhs.overflowing_sub(rhs);
+                    assert_eq!(lhs.wrapping_sub(rhs), sub);
+                    assert_eq!(lhs.checked_sub(rhs), (!sub_overflowed).then_some(sub));
+                    assert_eq!(lhs.saturating_sub(rhs), if sub_overflowed { Decimal::ZERO } else { sub });
+
+                    let (mul, mul_overflowed) = lhs.overflowing_mul(rhs);
+                    assert_eq!(lhs.wrapping_mul(rhs), mul);
+                    assert_eq!(lhs.checked_mul(rhs), (!mul_overflowed).then_some(mul));
+                    assert_eq!(lhs.saturating_mul(rhs), if mul_overflowed { Decimal::MAX } else { mul });
+
+                    if rhs != Decimal::ZERO {
+                        let (div, div_overflowed) = lhs.overflowing_div(rhs);
+                        assert_eq!(lhs.wrapping_div(rhs), div);
+                        assert_eq!(lhs.checked_div(rhs), (!div_overflowed).then_some(div));
+                        assert_eq!(lhs.saturating_div(rhs), if div_overflowed { Decimal::MAX } else { div });
+                    }
+                }
+            }
+        }
+
+        #[test]
+        #[should_panic(expected = "attempt to divide by zero")]
+        fn should_panic_when_saturating_divides_by_zero() {
+            let _ = Decimal::ONE.saturating_div(Decimal::ZERO);
+        }
+
+        #[test]
+        #[should_panic(expected = "attempt to divide by zero")]
+        fn should_panic_when_wrapping_divides_by_zero() {
+            let _ = Decimal::ONE.wrapping_div(Decimal::ZERO);
+        }
+
+        #[test]
+        #[should_panic(expected = "attempt to divide by zero")]
+        fn should_panic_when_overflowing_divides_by_zero() {
+            let _ = Decimal::ONE.overflowing_div(Decimal::ZERO);
+        }
+    }
+
     mod mul {
         use crate::{DecimalU64, U8};
         use rstest_macros::rstest;
