@@ -3,24 +3,24 @@ use decimal64::{DecimalU64, U3, U8};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
-const NUM: &str = "123.456";
-
 fn decimal64_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("decimal64");
     group.bench_function("decimal64_u3", |b| {
         b.iter(|| {
-            black_box(DecimalU64::<U3>::from_str(black_box(NUM)).unwrap());
+            let dec = DecimalU64::<U3>::from_str(black_box("123.456")).unwrap();
+            black_box(dec);
         })
     });
     group.bench_function("decimal64_u8", |b| {
         b.iter(|| {
-            black_box(DecimalU64::<U8>::from_str(black_box(NUM)).unwrap());
+            let dec = DecimalU64::<U8>::from_str(black_box("123.456")).unwrap();
+            black_box(dec);
         })
     });
     group.bench_function("decimal64_to_string", |b| {
-        let dec = DecimalU64::<U8>::from_str(NUM).unwrap();
+        let dec = DecimalU64::<U8>::from_str("123.456").unwrap();
         b.iter(|| {
-            black_box(black_box(dec).to_string());
+            black_box(dec.to_string());
         })
     });
 }
@@ -29,13 +29,14 @@ fn rust_decimal_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("rust_decimal");
     group.bench_function("rust_decimal", |b| {
         b.iter(|| {
-            black_box(Decimal::from_str(black_box(NUM)).unwrap());
+            let dec = Decimal::from_str(black_box("123.456")).unwrap();
+            black_box(dec);
         })
     });
     group.bench_function("rust_decimal_to_string", |b| {
-        let dec = Decimal::from_str(NUM).unwrap();
+        let dec = Decimal::from_str("123.456").unwrap();
         b.iter(|| {
-            black_box(black_box(dec).to_string());
+            black_box(dec.to_string());
         })
     });
 }
