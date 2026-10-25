@@ -1,4 +1,5 @@
 use crate::error::{Error, InvalidInputKind};
+use crate::macros::gen_scale;
 use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
 
@@ -10,7 +11,22 @@ pub mod round;
 #[cfg(feature = "serde")]
 pub mod serde;
 
-pub trait ScaleMetrics {
+/// Scale metadata implemented by the built-in [`U0`] through [`U8`] scales.
+///
+/// This trait is sealed and cannot be implemented outside this crate.
+///
+/// ```compile_fail
+/// use decimal64::ScaleMetrics;
+///
+/// struct U9;
+///
+/// impl ScaleMetrics for U9 {
+///     const SCALE: u8 = 9;
+///     const SCALE_FACTOR: u64 = 1_000_000_000;
+///     const REQUIRED_BUFFER_LEN: usize = 21;
+/// }
+/// ```
+pub trait ScaleMetrics: private::Sealed {
     const SCALE: u8;
     const SCALE_FACTOR: u64;
     const REQUIRED_BUFFER_LEN: usize;
@@ -439,6 +455,10 @@ impl<S: ScaleMetrics> DecimalU64<S> {
 
         end
     }
+}
+
+mod private {
+    pub trait Sealed {}
 }
 
 #[cfg(test)]
