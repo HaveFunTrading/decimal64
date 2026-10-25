@@ -1,16 +1,23 @@
+use crate::error::{Error, InvalidInputKind};
 use crate::{DecimalU64, ScaleMetrics};
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::fmt;
 use std::marker::PhantomData;
 
-impl<SM: ScaleMetrics> Serialize for DecimalU64<SM> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+impl<S: ScaleMetrics> Serialize for DecimalU64<S> {
+    fn serialize<Ser>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error>
     where
-        S: Serializer,
+        Ser: Serializer,
     {
-        let s = self.to_string();
-        serializer.serialize_str(&s)
+        serializer.collect_str(self)
+    }
+}
+
+fn from_u64<S: ScaleMetrics>(value: u64) -> Result<DecimalU64<S>, Error> {
+    match value.checked_mul(S::SCALE_FACTOR) {
+        Some(unscaled) => Ok(DecimalU64::new(unscaled)),
+        None => Err(Error::Overflow),
     }
 }
 
@@ -22,34 +29,31 @@ impl<S: ScaleMetrics> Visitor<'_> for DecimalVisitor<S> {
     type Value = DecimalU64<S>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a decimal represented as a string or a floating point number")
+        formatter.write_str("a non-negative decimal represented as a string or number")
     }
 
     fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        let s = value.to_string();
-        let decimal = DecimalU64::from_str(&s).map_err(E::custom)?;
-        Ok(decimal)
+        if value < 0 {
+            return Err(E::custom(Error::InvalidInput(InvalidInputKind::NegativeNumber)));
+        }
+        from_u64(value as u64).map_err(E::custom)
     }
 
     fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        let s = value.to_string();
-        let decimal = DecimalU64::from_str(&s).map_err(E::custom)?;
-        Ok(decimal)
+        from_u64(value).map_err(E::custom)
     }
 
     fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        let s = value.to_string();
-        let decimal = DecimalU64::from_str(&s).map_err(E::custom)?;
-        Ok(decimal)
+        DecimalU64::from_f64(value).map_err(E::custom)
     }
 
     fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>

@@ -1,15 +1,13 @@
 use crate::{DecimalU64, ScaleMetrics};
-use std::iter::Sum;
-use std::ops::{Add, AddAssign, Div, Mul, Sub, SubAssign};
+use std::iter::{Product, Sum};
+use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
 
 impl<S: ScaleMetrics> Mul for DecimalU64<S> {
     type Output = DecimalU64<S>;
 
     #[inline]
     fn mul(self, rhs: Self) -> Self::Output {
-        let product = self.0 as u128 * rhs.0 as u128;
-        let scale_factor = S::SCALE_FACTOR as u128;
-        Self::new((product / scale_factor) as u64)
+        self.checked_mul(rhs).expect("attempt to multiply with overflow")
     }
 }
 
@@ -18,8 +16,7 @@ impl<S: ScaleMetrics> Add for DecimalU64<S> {
 
     #[inline]
     fn add(self, rhs: Self) -> Self::Output {
-        let sum = self.0 + rhs.0;
-        Self::new(sum)
+        self.checked_add(rhs).expect("attempt to add with overflow")
     }
 }
 
@@ -28,8 +25,7 @@ impl<S: ScaleMetrics> Sub for DecimalU64<S> {
 
     #[inline]
     fn sub(self, rhs: Self) -> Self::Output {
-        let diff = self.0 - rhs.0;
-        Self::new(diff)
+        self.checked_sub(rhs).expect("attempt to subtract with overflow")
     }
 }
 
@@ -39,45 +35,65 @@ impl<S: ScaleMetrics> Div for DecimalU64<S> {
     #[inline]
     fn div(self, rhs: Self) -> Self::Output {
         if rhs.0 == 0 {
-            panic!("Division by zero");
+            panic!("attempt to divide by zero");
         }
-        let dividend = self.0 as u128 * S::SCALE_FACTOR as u128;
-        let quotient = dividend / (rhs.0 as u128);
-        Self::new(quotient as u64)
+        self.checked_div(rhs).expect("attempt to divide with overflow")
     }
 }
 
 impl<S: ScaleMetrics> AddAssign for DecimalU64<S> {
     #[inline]
-    fn add_assign(&mut self, rhs: DecimalU64<S>) {
-        self.0 += rhs.0;
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
     }
 }
 
-impl<'a, S: ScaleMetrics> AddAssign<&'a DecimalU64<S>> for DecimalU64<S> {
-    fn add_assign(&mut self, rhs: &'a DecimalU64<S>) {
-        self.0 += rhs.0;
-    }
-}
-
-impl<S: ScaleMetrics> AddAssign<DecimalU64<S>> for &mut DecimalU64<S> {
+impl<S: ScaleMetrics> AddAssign<&DecimalU64<S>> for DecimalU64<S> {
     #[inline]
-    fn add_assign(&mut self, rhs: DecimalU64<S>) {
-        self.0 += rhs.0;
-    }
-}
-
-impl<'a, S: ScaleMetrics> AddAssign<&'a DecimalU64<S>> for &'a mut DecimalU64<S> {
-    #[inline]
-    fn add_assign(&mut self, rhs: &'a DecimalU64<S>) {
-        self.0 += rhs.0;
+    fn add_assign(&mut self, rhs: &Self) {
+        *self += *rhs;
     }
 }
 
 impl<S: ScaleMetrics> SubAssign for DecimalU64<S> {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
-        self.0 -= rhs.0;
+        *self = *self - rhs;
+    }
+}
+
+impl<S: ScaleMetrics> SubAssign<&DecimalU64<S>> for DecimalU64<S> {
+    #[inline]
+    fn sub_assign(&mut self, rhs: &Self) {
+        *self -= *rhs;
+    }
+}
+
+impl<S: ScaleMetrics> MulAssign for DecimalU64<S> {
+    #[inline]
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
+}
+
+impl<S: ScaleMetrics> MulAssign<&DecimalU64<S>> for DecimalU64<S> {
+    #[inline]
+    fn mul_assign(&mut self, rhs: &Self) {
+        *self *= *rhs;
+    }
+}
+
+impl<S: ScaleMetrics> DivAssign for DecimalU64<S> {
+    #[inline]
+    fn div_assign(&mut self, rhs: Self) {
+        *self = *self / rhs;
+    }
+}
+
+impl<S: ScaleMetrics> DivAssign<&DecimalU64<S>> for DecimalU64<S> {
+    #[inline]
+    fn div_assign(&mut self, rhs: &Self) {
+        *self /= *rhs;
     }
 }
 
@@ -98,6 +114,26 @@ impl<'a, S: ScaleMetrics> Sum<&'a DecimalU64<S>> for DecimalU64<S> {
             sum += i;
         }
         sum
+    }
+}
+
+impl<S: ScaleMetrics> Product for DecimalU64<S> {
+    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
+        let mut product = Self::ONE;
+        for value in iter {
+            product *= value;
+        }
+        product
+    }
+}
+
+impl<'a, S: ScaleMetrics> Product<&'a DecimalU64<S>> for DecimalU64<S> {
+    fn product<I: Iterator<Item = &'a DecimalU64<S>>>(iter: I) -> Self {
+        let mut product = Self::ONE;
+        for value in iter {
+            product *= value;
+        }
+        product
     }
 }
 
@@ -453,6 +489,36 @@ mod tests {
         }
     }
 
+    mod operators {
+        use crate::{DecimalU64, U2};
+
+        type Decimal = DecimalU64<U2>;
+
+        #[test]
+        #[should_panic(expected = "attempt to add with overflow")]
+        fn should_panic_when_addition_overflows() {
+            let _ = Decimal::MAX + Decimal::new(1);
+        }
+
+        #[test]
+        #[should_panic(expected = "attempt to subtract with overflow")]
+        fn should_panic_when_subtraction_underflows() {
+            let _ = Decimal::ZERO - Decimal::new(1);
+        }
+
+        #[test]
+        #[should_panic(expected = "attempt to multiply with overflow")]
+        fn should_panic_when_multiplication_overflows() {
+            let _ = Decimal::MAX * Decimal::TWO;
+        }
+
+        #[test]
+        #[should_panic(expected = "attempt to divide with overflow")]
+        fn should_panic_when_division_overflows() {
+            let _ = Decimal::MAX / Decimal::new(1);
+        }
+    }
+
     mod mul {
         use crate::{DecimalU64, U8};
         use rstest_macros::rstest;
@@ -561,7 +627,7 @@ mod tests {
         }
 
         #[test]
-        #[should_panic = "Division by zero"]
+        #[should_panic = "attempt to divide by zero"]
         fn should_panic_if_div_by_zero() {
             let dec_a = DecimalU64::<U8>::from_str("123.45678901").unwrap();
             let dec_zero = DecimalU64::<U8>::ZERO;
@@ -581,17 +647,20 @@ mod tests {
         use crate::{DecimalU64, U8};
 
         #[test]
-        fn should_add_and_sub_assign() {
-            let mut one = DecimalU64::<U8>::from_str("100").unwrap();
-            let two = DecimalU64::<U8>::from_str("200").unwrap();
-            one += two;
-            assert_eq!("300.00000000", one.to_string());
-            one -= two;
-            assert_eq!("100.00000000", one.to_string());
+        fn should_apply_owned_and_borrowed_assignments() {
+            let mut value = DecimalU64::<U8>::from_str("6").unwrap();
+            let two = DecimalU64::<U8>::TWO;
+
+            value += two;
+            value -= &two;
+            value *= two;
+            value /= &two;
+
+            assert_eq!("6.00000000", value.to_string());
         }
     }
 
-    mod sum {
+    mod iterator_arithmetic {
         use crate::{DecimalU64, U8};
 
         #[test]
@@ -603,6 +672,17 @@ mod tests {
             let values: Vec<DecimalU64<U8>> = vec![DecimalU64::ONE, DecimalU64::TWO];
             let sum = values.iter().sum::<DecimalU64<U8>>();
             assert_eq!(sum, DecimalU64::THREE);
+        }
+
+        #[test]
+        fn should_multiply_values() {
+            let values: Vec<DecimalU64<U8>> = vec![];
+            let product = values.iter().product::<DecimalU64<U8>>();
+            assert_eq!(product, DecimalU64::ONE);
+
+            let values = vec![DecimalU64::<U8>::TWO, DecimalU64::THREE];
+            let product = values.into_iter().product::<DecimalU64<U8>>();
+            assert_eq!(product, DecimalU64::SIX);
         }
     }
 }

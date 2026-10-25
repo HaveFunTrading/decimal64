@@ -1,7 +1,8 @@
 use crate::{DecimalU64, ScaleMetrics};
 
 pub trait RoundingPolicy {
-    fn round<S: ScaleMetrics + Copy>(value: DecimalU64<S>, tick_size: DecimalU64<S>) -> DecimalU64<S>;
+    /// Rounds `value` to `tick_size`.
+    fn round<S: ScaleMetrics>(value: DecimalU64<S>, tick_size: DecimalU64<S>) -> DecimalU64<S>;
 }
 
 ///  Round‑half‑up (“.5 → up”), e.g. 0.125 at tick 0.01 → 0.13.
@@ -9,9 +10,24 @@ pub struct HalfUp;
 
 impl RoundingPolicy for HalfUp {
     #[inline]
-    fn round<S: ScaleMetrics + Copy>(value: DecimalU64<S>, tick_size: DecimalU64<S>) -> DecimalU64<S> {
-        let half_tick = tick_size.0 / 2;
-        DecimalU64::new(((value.0 + half_tick) / tick_size.0) * tick_size.0)
+    fn round<S: ScaleMetrics>(value: DecimalU64<S>, tick_size: DecimalU64<S>) -> DecimalU64<S> {
+        let tick = tick_size.0;
+        if tick == 0 {
+            panic!("attempt to round with a zero tick size");
+        }
+
+        let quotient = value.0 / tick;
+        let remainder = value.0 % tick;
+        let round_up_at = tick - tick / 2;
+        let rounded = if remainder >= round_up_at {
+            quotient
+                .checked_add(1)
+                .and_then(|value| value.checked_mul(tick))
+                .expect("attempt to round with overflow")
+        } else {
+            quotient * tick
+        };
+        DecimalU64::new(rounded)
     }
 }
 
@@ -20,8 +36,13 @@ pub struct Floor;
 
 impl RoundingPolicy for Floor {
     #[inline]
-    fn round<S: ScaleMetrics + Copy>(value: DecimalU64<S>, tick_size: DecimalU64<S>) -> DecimalU64<S> {
-        DecimalU64::new((value.0 / tick_size.0) * tick_size.0)
+    fn round<S: ScaleMetrics>(value: DecimalU64<S>, tick_size: DecimalU64<S>) -> DecimalU64<S> {
+        let tick = tick_size.0;
+        if tick == 0 {
+            panic!("attempt to round with a zero tick size");
+        }
+
+        DecimalU64::new((value.0 / tick) * tick)
     }
 }
 
@@ -29,13 +50,33 @@ impl RoundingPolicy for Floor {
 pub struct Ceil;
 
 impl RoundingPolicy for Ceil {
-    #[allow(clippy::manual_div_ceil)]
-    fn round<S: ScaleMetrics + Copy>(value: DecimalU64<S>, tick_size: DecimalU64<S>) -> DecimalU64<S> {
-        DecimalU64::new(((value.0 + tick_size.0 - 1) / tick_size.0) * tick_size.0)
+    fn round<S: ScaleMetrics>(value: DecimalU64<S>, tick_size: DecimalU64<S>) -> DecimalU64<S> {
+        let tick = tick_size.0;
+        if tick == 0 {
+            panic!("attempt to round with a zero tick size");
+        }
+
+        let quotient = value.0 / tick;
+        let remainder = value.0 % tick;
+        let rounded = if remainder == 0 {
+            value.0
+        } else {
+            quotient
+                .checked_add(1)
+                .and_then(|value| value.checked_mul(tick))
+                .expect("attempt to round with overflow")
+        };
+        DecimalU64::new(rounded)
     }
 }
 
-impl<S: ScaleMetrics + Copy> DecimalU64<S> {
+impl<S: ScaleMetrics> DecimalU64<S> {
+    /// Rounds to `tick_size` using `R`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `tick_size` is zero or the rounded result cannot be represented by `Self`.
+    #[must_use]
     pub fn round<R: RoundingPolicy>(self, tick_size: DecimalU64<S>) -> DecimalU64<S> {
         R::round(self, tick_size)
     }
@@ -46,6 +87,20 @@ mod tests {
     use super::*;
     use crate::U8;
     use rstest_macros::rstest;
+
+    struct Identity;
+
+    impl RoundingPolicy for Identity {
+        fn round<S: ScaleMetrics>(value: DecimalU64<S>, _tick_size: DecimalU64<S>) -> DecimalU64<S> {
+            value
+        }
+    }
+
+    #[test]
+    fn should_support_custom_rounding_policies() {
+        let value = DecimalU64::<U8>::new(123);
+        assert_eq!(value.round::<Identity>(DecimalU64::ZERO), value);
+    }
 
     #[rstest]
     #[case("300.00", "0.1", "300.00000000")]
@@ -111,5 +166,29 @@ mod tests {
                 .round::<Ceil>(DecimalU64::<U8>::from_str(tick_size).unwrap())
                 .to_string()
         );
+    }
+
+    #[test]
+    fn should_round_down_at_the_numeric_bound() {
+        let rounded = DecimalU64::<U8>::MAX.round::<Floor>(DecimalU64::new(10));
+        assert_eq!(rounded, DecimalU64::new(u64::MAX - 5));
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to round with a zero tick size")]
+    fn should_panic_when_rounding_with_a_zero_tick() {
+        let _ = DecimalU64::<U8>::ONE.round::<Floor>(DecimalU64::ZERO);
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to round with overflow")]
+    fn should_panic_when_rounding_overflows() {
+        let _ = DecimalU64::<U8>::MAX.round::<Ceil>(DecimalU64::new(10));
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to round with overflow")]
+    fn should_panic_when_half_up_rounding_overflows() {
+        let _ = DecimalU64::<U8>::MAX.round::<HalfUp>(DecimalU64::new(10));
     }
 }

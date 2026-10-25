@@ -8,7 +8,7 @@ pub mod error;
 mod macros;
 pub mod round;
 #[cfg(feature = "serde")]
-pub mod serde;
+mod serde;
 
 /// Scale metadata implemented by the built-in [`U0`] through [`U8`] scales.
 ///
@@ -25,7 +25,7 @@ pub mod serde;
 ///     const REQUIRED_BUFFER_LEN: usize = 21;
 /// }
 /// ```
-pub trait ScaleMetrics: private::Sealed {
+pub trait ScaleMetrics: private::Sealed + Copy {
     const SCALE: u8;
     const SCALE_FACTOR: u64;
     const REQUIRED_BUFFER_LEN: usize;

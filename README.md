@@ -17,3 +17,10 @@ let d2 = DecimalU64::<U8>::from_str("10").unwrap();
 let d3 = d1 + d2;
 assert_eq!("133.45000000", d3.to_string());
 ```
+
+## Arithmetic
+
+Arithmetic operands must use the same scale. The `+`, `-`, `*`, and `/` operators panic on
+overflow, underflow, or division by zero in all build profiles. Use the corresponding
+`checked_*`, `saturating_*`, `wrapping_*`, or `overflowing_*` methods when another overflow
+policy is required. Multiplication and division truncate toward zero at the result scale.
