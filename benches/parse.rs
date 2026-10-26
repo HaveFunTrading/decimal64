@@ -59,6 +59,10 @@ fn format_benchmark(c: &mut Criterion) {
         let dec = Decimal::from_str("80500.32000000").unwrap();
         b.iter(|| black_box(black_box(dec).array_string()))
     });
+    group.bench_function("rust_decimal/array_string_trimmed", |b| {
+        let dec = Decimal::from_str("80500.32").unwrap();
+        b.iter(|| black_box(black_box(dec).array_string()))
+    });
     group.bench_function("decimal64/to_string", |b| {
         let dec = DecimalU64::<U8>::from_str("123.456").unwrap();
         b.iter(|| black_box(black_box(dec).to_string()))

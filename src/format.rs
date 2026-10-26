@@ -33,14 +33,11 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     }
 
     #[inline]
-    fn try_write_impl(&self, buffer: &mut [u8], trimmed: bool) -> Result<usize, BufferTooSmall> {
+    fn try_write_impl<const TRIMMED: bool>(&self, buffer: &mut [u8]) -> Result<usize, BufferTooSmall> {
         let (integer, mut fractional) = self.split();
         let mut fractional_digits = S::SCALE as usize;
-        if trimmed {
-            while fractional_digits != 0 && fractional.is_multiple_of(10) {
-                fractional /= 10;
-                fractional_digits -= 1;
-            }
+        if TRIMMED {
+            (fractional, fractional_digits) = trim_fractional(fractional, fractional_digits);
         }
         try_write_parts(buffer, integer, fractional, fractional_digits)
     }
@@ -58,16 +55,13 @@ impl<S: ScaleMetrics> DecimalI64<S> {
     }
 
     #[inline]
-    fn try_write_impl(&self, buffer: &mut [u8], trimmed: bool) -> Result<usize, BufferTooSmall> {
+    fn try_write_impl<const TRIMMED: bool>(&self, buffer: &mut [u8]) -> Result<usize, BufferTooSmall> {
         let magnitude = self.0.unsigned_abs();
         let integer = magnitude / S::SCALE_FACTOR;
         let mut fractional = magnitude % S::SCALE_FACTOR;
         let mut fractional_digits = S::SCALE as usize;
-        if trimmed {
-            while fractional_digits != 0 && fractional.is_multiple_of(10) {
-                fractional /= 10;
-                fractional_digits -= 1;
-            }
+        if TRIMMED {
+            (fractional, fractional_digits) = trim_fractional(fractional, fractional_digits);
         }
 
         if self.0 >= 0 {
@@ -100,6 +94,30 @@ impl<S: ScaleMetrics> DecimalI64<S> {
 
 impl_decimal_formatting!(DecimalU64);
 impl_decimal_formatting!(DecimalI64);
+
+#[inline(always)]
+fn trim_fractional(mut fractional: u64, mut digits: usize) -> (u64, usize) {
+    if fractional == 0 {
+        return (0, 0);
+    }
+
+    // Scales are limited to U0-U8, so binary decomposition removes every
+    // possible number of trailing zeros in at most three remainder checks.
+    if digits > 4 && fractional.is_multiple_of(10_000) {
+        fractional /= 10_000;
+        digits -= 4;
+    }
+    if digits > 2 && fractional.is_multiple_of(100) {
+        fractional /= 100;
+        digits -= 2;
+    }
+    if digits > 1 && fractional.is_multiple_of(10) {
+        fractional /= 10;
+        digits -= 1;
+    }
+
+    (fractional, digits)
+}
 
 #[inline]
 fn try_write_parts(
@@ -174,4 +192,28 @@ fn try_write_parts(
     }
 
     Ok(end)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trim_fractional;
+
+    #[test]
+    fn trims_every_supported_number_of_fractional_zeros() {
+        let cases = [
+            (12_345_678, (12_345_678, 8)),
+            (12_345_670, (1_234_567, 7)),
+            (12_345_600, (123_456, 6)),
+            (12_345_000, (12_345, 5)),
+            (12_340_000, (1_234, 4)),
+            (12_300_000, (123, 3)),
+            (12_000_000, (12, 2)),
+            (10_000_000, (1, 1)),
+            (0, (0, 0)),
+        ];
+
+        for (fractional, expected) in cases {
+            assert_eq!(trim_fractional(fractional, 8), expected);
+        }
+    }
 }

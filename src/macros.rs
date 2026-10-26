@@ -387,7 +387,7 @@ macro_rules! impl_decimal_formatting {
             /// if it cannot hold the formatted value.
             #[inline]
             pub fn try_write_to(&self, buffer: &mut [u8]) -> Result<usize, $crate::BufferTooSmall> {
-                self.try_write_impl(buffer, false)
+                self.try_write_impl::<false>(buffer)
             }
 
             /// Writes this decimal into `buffer` without trailing fractional
@@ -414,7 +414,7 @@ macro_rules! impl_decimal_formatting {
             /// if it cannot hold the formatted value.
             #[inline]
             pub fn try_write_to_trimmed(&self, buffer: &mut [u8]) -> Result<usize, $crate::BufferTooSmall> {
-                self.try_write_impl(buffer, true)
+                self.try_write_impl::<true>(buffer)
             }
         }
 

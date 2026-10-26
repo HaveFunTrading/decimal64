@@ -63,7 +63,7 @@ use decimal64::{DecimalI64, U4};
 
 let value = DecimalI64::<U4>::from_str("-12.3400").unwrap();
 let mut buffer = [0_u8; 16];
-let len = value.try_write_to_trimmed(&mut buffer).unwrap();
+let len = value.try_write_to_trimmed( & mut buffer).unwrap();
 assert_eq!(&buffer[..len], b"-12.34");
 ```
 
@@ -105,16 +105,17 @@ The crate includes Criterion benchmarks against `rust_decimal`. A reference run 
 following median estimates; lower is better. Each table row lists the exact Criterion benchmark
 identifiers used for the two measurements.
 
-| Operation | Criterion benchmarks (Decimal64 / `rust_decimal`) | Decimal64 | `rust_decimal` | Speedup |
-|-----------|---------------------------------------------------|----------:|---------------:|--------:|
-| Parse `"123.456"` | `parse_u3/decimal64/exact_scale`<br>`parse_u3/rust_decimal/exact_scale` | 2.58 ns | 7.83 ns | 3.0× |
-| Parse `"80500.32000000"` | `parse_u8/decimal64/price_padded`<br>`parse_u8/rust_decimal/price_padded` | 4.19 ns | 9.57 ns | 2.3× |
-| Checked multiply | `decimal64/checked_mul`<br>`rust_decimal/checked_mul` | 1.85 ns | 2.06 ns | 1.1× |
-| Rescale U2 → U8 | `rescale/decimal64_up`<br>`rescale/rust_decimal_up` | 0.277 ns | 5.67 ns | 20× |
-| Convert from `f64` | `decimal64_f64/from_f64`<br>`rust_decimal_f64/from_f64` | 1.64 ns | 61.5 ns | 37× |
-| Convert to `f64` | `decimal64_f64/to_f64`<br>`rust_decimal_f64/to_f64` | 0.733 ns | 11.4 ns | 16× |
-| Format without allocation | `format/decimal64/write_to`<br>`format/rust_decimal/array_string` | 4.41 ns | 32.0 ns | 7.3× |
-| Format with `to_string` | `format/decimal64/to_string`<br>`format/rust_decimal/to_string` | 16.0 ns | 41.6 ns | 2.6× |
+| Operation                             | Benchmark        | `decimal64` | `rust_decimal` | Speedup |
+|---------------------------------------|------------------|------------:|---------------:|--------:|
+| Parse `"123.456"`                     | exact_scale      |     2.58 ns |        7.83 ns |    3.0× |
+| Parse `"80500.32000000"`              | price_padded     |     4.19 ns |        9.57 ns |    2.3× |
+| Checked multiply                      | checked_mul      |     1.85 ns |        2.06 ns |    1.1× |
+| Rescale U2 → U8                       | rust_decimal_up  |    0.277 ns |        5.67 ns |     20× |
+| Convert from `f64`                    | from_f64         |     1.64 ns |        61.5 ns |     37× |
+| Convert to `f64`                      | to_f64           |    0.733 ns |        11.4 ns |     16× |
+| Format fixed-scale without allocation | write_to         |     4.20 ns |        32.0 ns |    7.6× |
+| Format trimmed without allocation     | write_to_trimmed |     4.49 ns |        18.9 ns |    4.2× |
+| Format fixed-scale with `to_string`   | to_string        |     16.0 ns |        41.2 ns |    2.6× |
 
 Reference environment: `rust_decimal` 1.43.0, Rust 1.98.1, Linux x86-64, Intel Core
 i9-14900HX, compiled for the host CPU. The full command was:
