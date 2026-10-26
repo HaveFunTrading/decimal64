@@ -370,6 +370,9 @@ mod signed {
                         prop_assert_eq!(Decimal::ZERO.checked_mul(value), Some(Decimal::ZERO));
                         prop_assert_eq!(value.checked_neg(), raw.checked_neg().map(Decimal::new));
                         prop_assert_eq!(value.checked_abs(), raw.checked_abs().map(Decimal::new));
+                        if raw != i64::MIN {
+                            prop_assert_eq!(value.abs(), Decimal::new(raw.abs()));
+                        }
                         prop_assert_eq!(value.unsigned_abs().0, raw.unsigned_abs());
                     }
                 }
@@ -397,6 +400,7 @@ mod signed {
                 #[test]
                 fn overflow_and_zero_divisor_panics_match_operator_contracts() {
                     let one_raw = Decimal::new(1);
+                    assert!(std::panic::catch_unwind(|| Decimal::MIN.abs()).is_err());
                     assert!(std::panic::catch_unwind(|| Decimal::MAX + one_raw).is_err());
                     assert!(
                         std::panic::catch_unwind(|| {

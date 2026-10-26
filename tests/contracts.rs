@@ -254,6 +254,7 @@ mod arithmetic {
         assert_eq!(value.unsigned_abs(), DecimalU64::new(123));
         assert_eq!(DecimalI64::<U2>::MIN.checked_neg(), None);
         assert_eq!(DecimalI64::<U2>::MIN.checked_abs(), None);
+        assert!(std::panic::catch_unwind(|| DecimalI64::<U2>::MIN.abs()).is_err());
         assert_eq!(DecimalI64::<U2>::MIN.saturating_abs(), DecimalI64::MAX);
         assert_eq!(DecimalI64::<U2>::MIN.wrapping_abs(), DecimalI64::MIN);
         assert_eq!(DecimalI64::<U2>::MIN.overflowing_abs(), (DecimalI64::MIN, true));
