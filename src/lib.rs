@@ -41,6 +41,16 @@
 //! and `overflowing_*` method families provide explicit alternatives.
 //! Multiplication and division truncate toward zero at the result scale.
 //!
+//! Values with different scales cannot be combined accidentally:
+//!
+//! ```compile_fail
+//! use decimal64::{DecimalU64, U2, U4};
+//!
+//! let price = DecimalU64::<U2>::new(100);
+//! let quantity = DecimalU64::<U4>::new(100);
+//! let _ = price + quantity;
+//! ```
+//!
 //! # Formatting
 //!
 //! [`DecimalU64::write_to`] and [`DecimalU64::write_to_trimmed`] write directly
@@ -346,11 +356,11 @@ impl<S: ScaleMetrics> DecimalU64<S> {
 
     #[inline(always)]
     const fn from_short_slice<const CHECK_SCALE_OVERFLOW: bool>(bytes: &[u8], mut index: usize) -> Result<Self, Error> {
-        if bytes.len() - index == 8 {
-            if let Some(integer) = parse_eight_digits(bytes, index) {
-                let unscaled = integer as u64 * S::SCALE_FACTOR;
-                return Ok(Self(unscaled, PhantomData));
-            }
+        if bytes.len() - index == 8
+            && let Some(integer) = parse_eight_digits(bytes, index)
+        {
+            let unscaled = integer as u64 * S::SCALE_FACTOR;
+            return Ok(Self(unscaled, PhantomData));
         }
 
         let mut unscaled: u64 = 0;
@@ -376,13 +386,13 @@ impl<S: ScaleMetrics> DecimalU64<S> {
         let mut fractional_digits = 0usize;
         if seen_decimal_point {
             let remaining = bytes.len() - index;
-            if remaining <= S::SCALE as usize {
-                if let Some(fraction) = parse_up_to_eight_digits(bytes, index, remaining) {
-                    unscaled = unscaled * SCALE_FACTORS[remaining] + fraction;
-                    fractional_digits = remaining;
-                    seen_digits += remaining;
-                    index += remaining;
-                }
+            if remaining <= S::SCALE as usize
+                && let Some(fraction) = parse_up_to_eight_digits(bytes, index, remaining)
+            {
+                unscaled = unscaled * SCALE_FACTORS[remaining] + fraction;
+                fractional_digits = remaining;
+                seen_digits += remaining;
+                index += remaining;
             }
 
             while index < bytes.len() {

@@ -9,7 +9,7 @@ categories = ["finance", "science", "data-structures", "mathematics", "parsing"]
 readme = "./README.md"
 documentation = "https://docs.rs/decimal64"
 repository = "https://github.com/HaveFunTrading/decimal64"
-rust-version = "1.85.1"
+rust-version = "1.88"
 
 [features]
 default = []
@@ -22,6 +22,9 @@ serde = { version = "1.0.217", features = ["derive"],  optional = true }
 [dev-dependencies]
 anyhow = "1.0.97"
 criterion = "0.5.1"
+num-bigint = "0.4.6"
+num-traits = "0.2.19"
+proptest = "1.11.0"
 rust_decimal = "1.36.0"
 rstest = "0.25.0"
 serde_json = "1.0.140"
