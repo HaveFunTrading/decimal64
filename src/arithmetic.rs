@@ -1,3 +1,27 @@
+//! Fixed-point arithmetic for [`DecimalU64`].
+//!
+//! Both operands must have the same scale, and every result retains that
+//! scale. Addition and subtraction operate directly on the raw representation.
+//! Multiplication computes `(lhs.raw * rhs.raw) / scale_factor`, while division
+//! computes `(lhs.raw * scale_factor) / rhs.raw`; both truncate toward zero.
+//!
+//! The `+`, `-`, `*`, and `/` operators panic on arithmetic overflow,
+//! underflow, or division by zero in every build profile. Use the corresponding
+//! `checked_*`, `saturating_*`, `wrapping_*`, or `overflowing_*` methods when a
+//! different policy is required. Of the division methods, only
+//! [`DecimalU64::checked_div`] handles a zero divisor without panicking.
+//!
+//! ```
+//! use decimal64::{DecimalU64, U2};
+//!
+//! let price = DecimalU64::<U2>::from_str("12.50").unwrap();
+//! let quantity = DecimalU64::<U2>::from_str("2.00").unwrap();
+//!
+//! assert_eq!("25.00", price.checked_mul(quantity).unwrap().to_string());
+//! assert_eq!(None, DecimalU64::<U2>::MAX.checked_add(DecimalU64::ONE));
+//! assert_eq!(DecimalU64::<U2>::MAX, DecimalU64::<U2>::MAX.saturating_add(DecimalU64::ONE));
+//! ```
+
 use crate::{DecimalU64, ScaleMetrics};
 use std::iter::{Product, Sum};
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
@@ -196,6 +220,8 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     }
 
     /// Saturating fixed-point addition.
+    ///
+    /// Returns [`Self::MAX`] if the mathematical result is too large.
     #[must_use]
     #[inline]
     pub const fn saturating_add(self, rhs: Self) -> Self {
@@ -203,6 +229,8 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     }
 
     /// Saturating fixed-point subtraction.
+    ///
+    /// Returns [`Self::ZERO`] if the mathematical result would be negative.
     #[must_use]
     #[inline]
     pub const fn saturating_sub(self, rhs: Self) -> Self {
@@ -247,6 +275,8 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     }
 
     /// Wrapping fixed-point addition.
+    ///
+    /// Wraps the raw result modulo `2^64`.
     #[must_use]
     #[inline]
     pub const fn wrapping_add(self, rhs: Self) -> Self {
@@ -254,6 +284,8 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     }
 
     /// Wrapping fixed-point subtraction.
+    ///
+    /// Wraps the raw result modulo `2^64`.
     #[must_use]
     #[inline]
     pub const fn wrapping_sub(self, rhs: Self) -> Self {
@@ -453,7 +485,10 @@ mod tests {
                     let (sub, sub_overflowed) = lhs.overflowing_sub(rhs);
                     assert_eq!(lhs.wrapping_sub(rhs), sub);
                     assert_eq!(lhs.checked_sub(rhs), (!sub_overflowed).then_some(sub));
-                    assert_eq!(lhs.saturating_sub(rhs), if sub_overflowed { Decimal::ZERO } else { sub });
+                    assert_eq!(
+                        lhs.saturating_sub(rhs),
+                        if sub_overflowed { Decimal::ZERO } else { sub }
+                    );
 
                     let (mul, mul_overflowed) = lhs.overflowing_mul(rhs);
                     assert_eq!(lhs.wrapping_mul(rhs), mul);
@@ -521,7 +556,7 @@ mod tests {
 
     mod mul {
         use crate::{DecimalU64, U8};
-        use rstest_macros::rstest;
+        use rstest::rstest;
 
         #[rstest]
         #[case("0.2", "50000", "10000.00000000")]
@@ -547,7 +582,7 @@ mod tests {
 
     mod add {
         use crate::{DecimalU64, U8};
-        use rstest_macros::rstest;
+        use rstest::rstest;
 
         #[rstest]
         #[case("0.2", "50000", "50000.20000000")]
@@ -577,7 +612,7 @@ mod tests {
 
     mod sub {
         use crate::{DecimalU64, U8};
-        use rstest_macros::rstest;
+        use rstest::rstest;
 
         #[rstest]
         #[case("50000", "0.2", "49999.80000000")]
@@ -602,7 +637,7 @@ mod tests {
 
     mod div {
         use crate::{DecimalU64, U8};
-        use rstest_macros::rstest;
+        use rstest::rstest;
 
         #[rstest]
         #[case("50000", "0.2", "250000.00000000")]

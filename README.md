@@ -12,6 +12,8 @@ in form of generic `ScaleMetrics` parameter. Loosely inspired by Java [Decimal4j
 ## Example
 
 ```rust
+use decimal64::{DecimalU64, U8};
+
 let d1 = DecimalU64::<U8>::from_str("123.45").unwrap();
 let d2 = DecimalU64::<U8>::from_str("10").unwrap();
 let d3 = d1 + d2;

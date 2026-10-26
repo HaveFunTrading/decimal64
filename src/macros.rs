@@ -1,5 +1,6 @@
 macro_rules! gen_scale {
     ($struct_name:ident, $scale:expr, $buffer_len:expr) => {
+        #[doc = concat!("Type-level decimal scale with ", stringify!($scale), " fractional digits.")]
         #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
         pub struct $struct_name;
 

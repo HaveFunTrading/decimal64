@@ -1,11 +1,43 @@
+//! Rounding decimal values to tick-size multiples.
+//!
+//! [`HalfUp`], [`Floor`], and [`Ceil`] provide the built-in rounding
+//! strategies. Apply one with [`DecimalU64::round`]. Values and tick sizes
+//! must have the same scale.
+//!
+//! ```
+//! use decimal64::round::HalfUp;
+//! use decimal64::{DecimalU64, U2};
+//!
+//! let value = DecimalU64::<U2>::from_str("1.26").unwrap();
+//! let tick_size = DecimalU64::<U2>::from_str("0.10").unwrap();
+//! assert_eq!("1.30", value.round::<HalfUp>(tick_size).to_string());
+//! ```
+
 use crate::{DecimalU64, ScaleMetrics};
 
+/// A strategy for rounding a decimal to a multiple of a tick size.
+///
+/// Implementations receive values with the same scale and return a value at
+/// that scale. The built-in policies panic when `tick_size` is zero or when
+/// rounding upward would exceed [`DecimalU64::MAX`].
 pub trait RoundingPolicy {
     /// Rounds `value` to `tick_size`.
+    ///
+    /// # Panics
+    ///
+    /// Implementations may panic when `tick_size` is zero or the rounded value
+    /// is not representable. See the policy's documentation for its contract.
     fn round<S: ScaleMetrics>(value: DecimalU64<S>, tick_size: DecimalU64<S>) -> DecimalU64<S>;
 }
 
-///  Round‑half‑up (“.5 → up”), e.g. 0.125 at tick 0.01 → 0.13.
+/// Rounds to the nearest tick, choosing the greater tick at the halfway point.
+///
+/// For example, `0.125` rounded to a `0.01` tick is `0.13`.
+///
+/// # Panics
+///
+/// Panics if the tick size is zero or the rounded result cannot be represented.
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct HalfUp;
 
 impl RoundingPolicy for HalfUp {
@@ -31,7 +63,14 @@ impl RoundingPolicy for HalfUp {
     }
 }
 
-/// Always down, e.g. 0.129 at tick 0.01 → 0.12.
+/// Rounds down to the nearest tick.
+///
+/// For example, `0.129` rounded to a `0.01` tick is `0.12`.
+///
+/// # Panics
+///
+/// Panics if the tick size is zero.
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct Floor;
 
 impl RoundingPolicy for Floor {
@@ -46,7 +85,14 @@ impl RoundingPolicy for Floor {
     }
 }
 
-/// Always up (if not exact), e.g. 0.121 at tick 0.01 → 0.13.
+/// Rounds up to the nearest tick unless the value is already a multiple.
+///
+/// For example, `0.121` rounded to a `0.01` tick is `0.13`.
+///
+/// # Panics
+///
+/// Panics if the tick size is zero or the rounded result cannot be represented.
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct Ceil;
 
 impl RoundingPolicy for Ceil {
@@ -86,7 +132,7 @@ impl<S: ScaleMetrics> DecimalU64<S> {
 mod tests {
     use super::*;
     use crate::U8;
-    use rstest_macros::rstest;
+    use rstest::rstest;
 
     struct Identity;
 

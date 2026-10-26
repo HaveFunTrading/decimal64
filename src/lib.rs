@@ -1,10 +1,65 @@
-use crate::error::{Error, InvalidInputKind};
+#![warn(missing_docs)]
+
+//! Fast unsigned fixed-point decimal arithmetic backed by a single [`u64`].
+//!
+//! [`DecimalU64`] stores an unscaled integer while its decimal scale is encoded
+//! in the type. The crate provides the sealed scales [`U0`] through [`U8`], so
+//! values with different scales are different Rust types and cannot be mixed
+//! accidentally.
+//!
+//! # Example
+//!
+//! ```
+//! use decimal64::{DecimalU64, U2, U8};
+//!
+//! let price = DecimalU64::<U2>::from_str("80500.32")?;
+//! let quantity = DecimalU64::<U2>::from_str("2.00")?;
+//! let total = price.checked_mul(quantity).unwrap();
+//! assert_eq!("161000.64", total.to_string());
+//!
+//! let normalized = price.rescale::<U8>()?;
+//! assert_eq!("80500.32000000", normalized.to_string());
+//! # Ok::<(), decimal64::Error>(())
+//! ```
+//!
+//! # Parsing and scaling
+//!
+//! [`DecimalU64::from_str`] and [`DecimalU64::from_slice`] accept plain,
+//! non-negative decimal notation. Parsing is exact: fractional digits beyond
+//! the target scale are accepted only when they are zero, and parsing never
+//! rounds. Scientific notation is intentionally unsupported.
+//!
+//! [`DecimalU64::rescale`] converts between the built-in scales. Upscaling
+//! returns [`Error::Overflow`] when the result does not fit in `u64`;
+//! downscaling rounds half-up.
+//!
+//! # Arithmetic
+//!
+//! Arithmetic operands must have the same scale. The standard `+`, `-`, `*`,
+//! and `/` operators panic on overflow, underflow, or division by zero in every
+//! build profile. The corresponding `checked_*`, `saturating_*`, `wrapping_*`,
+//! and `overflowing_*` method families provide explicit alternatives.
+//! Multiplication and division truncate toward zero at the result scale.
+//!
+//! # Formatting
+//!
+//! [`DecimalU64::write_to`] and [`DecimalU64::write_to_trimmed`] write directly
+//! into caller-provided buffers without allocation. [`Display`] and
+//! `ToString::to_string` are also supported.
+//!
+//! # Optional features
+//!
+//! The `serde` feature serializes and deserializes all built-in scales as
+//! decimal strings. Numeric tokens are rejected so deserialization follows the
+//! same exact policy as string parsing.
+
 use crate::macros::gen_scale;
 use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
 
 mod arithmetic;
 pub mod error;
+pub use error::{BufferTooSmall, Error, InvalidInputKind};
 mod macros;
 pub mod round;
 #[cfg(feature = "serde")]
@@ -26,8 +81,13 @@ mod serde;
 /// }
 /// ```
 pub trait ScaleMetrics: private::Sealed + Copy {
+    /// Number of digits after the decimal point.
     const SCALE: u8;
+
+    /// Power of ten used to convert between represented and unscaled values.
     const SCALE_FACTOR: u64;
+
+    /// Buffer length sufficient to format any decimal with this scale.
     const REQUIRED_BUFFER_LEN: usize;
 }
 
@@ -43,15 +103,51 @@ gen_scale!(U8, 8, 21);
 
 const SCALE_FACTORS: [u64; 9] = [1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000];
 const POW5_U128: [u128; 9] = [1, 5, 25, 125, 625, 3125, 15625, 78125, 390625];
+const DIGIT_PAIRS: [u8; 200] = make_digit_pairs();
 
-#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+const fn make_digit_pairs() -> [u8; 200] {
+    let mut pairs = [0u8; 200];
+    let mut value = 0usize;
+    while value < 100 {
+        pairs[value * 2] = b'0' + (value / 10) as u8;
+        pairs[value * 2 + 1] = b'0' + (value % 10) as u8;
+        value += 1;
+    }
+    pairs
+}
+
+#[inline(always)]
+fn write_digit_pair(buffer: &mut [u8], index: usize, value: usize) {
+    let pair = value * 2;
+    // SAFETY: callers guarantee value < 100 and sufficient buffer capacity.
+    unsafe {
+        *buffer.get_unchecked_mut(index) = *DIGIT_PAIRS.get_unchecked(pair);
+        *buffer.get_unchecked_mut(index + 1) = *DIGIT_PAIRS.get_unchecked(pair + 1);
+    }
+}
+
+/// An unsigned fixed-point decimal with a compile-time scale.
+///
+/// `S` is one of the built-in [`U0`] through [`U8`] scale types. The raw
+/// unscaled representation is available through the public tuple field.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
-pub struct DecimalU64<S>(pub u64, PhantomData<S>);
+pub struct DecimalU64<S>(
+    /// Raw unscaled integer representation.
+    pub u64,
+    PhantomData<S>,
+);
+
+impl<S: ScaleMetrics> Default for DecimalU64<S> {
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
 
 impl<S: ScaleMetrics> Display for DecimalU64<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         // A buffer large enough for our formatted value.
-        let mut buf = [0u8; 64];
+        let mut buf = [0u8; 21];
         let len = self.write_to(&mut buf);
         // Since we know our data is all ASCII, this is safe.
         let s = unsafe { std::str::from_utf8_unchecked(&buf[..len]) };
@@ -60,28 +156,58 @@ impl<S: ScaleMetrics> Display for DecimalU64<S> {
 }
 
 impl<S: ScaleMetrics> DecimalU64<S> {
+    /// Creates a decimal from its raw unscaled representation.
+    ///
+    /// The represented value is `unscaled / S::SCALE_FACTOR`. No parsing,
+    /// rounding, or validation is performed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use decimal64::{DecimalU64, U2};
+    ///
+    /// let value = DecimalU64::<U2>::new(12_345);
+    /// assert_eq!("123.45", value.to_string());
+    /// ```
     #[inline]
     pub const fn new(unscaled: u64) -> Self {
         Self(unscaled, PhantomData)
     }
 
+    /// The value zero.
     pub const ZERO: Self = DecimalU64::new(0);
+    /// The smallest representable value.
+    pub const MIN: Self = Self::ZERO;
+    /// The value one.
     pub const ONE: Self = DecimalU64::new(S::SCALE_FACTOR);
+    /// The value two.
     pub const TWO: Self = DecimalU64::new(2 * S::SCALE_FACTOR);
+    /// The value three.
     pub const THREE: Self = DecimalU64::new(3 * S::SCALE_FACTOR);
+    /// The value four.
     pub const FOUR: Self = DecimalU64::new(4 * S::SCALE_FACTOR);
+    /// The value five.
     pub const FIVE: Self = DecimalU64::new(5 * S::SCALE_FACTOR);
+    /// The value six.
     pub const SIX: Self = DecimalU64::new(6 * S::SCALE_FACTOR);
+    /// The value seven.
     pub const SEVEN: Self = DecimalU64::new(7 * S::SCALE_FACTOR);
+    /// The value eight.
     pub const EIGHT: Self = DecimalU64::new(8 * S::SCALE_FACTOR);
+    /// The value nine.
     pub const NINE: Self = DecimalU64::new(9 * S::SCALE_FACTOR);
+    /// The value ten.
     pub const TEN: Self = DecimalU64::new(10 * S::SCALE_FACTOR);
+    /// The largest representable raw value at this scale.
     pub const MAX: Self = DecimalU64::new(u64::MAX);
 
-    /// Parses a decimal from an ASCII byte slice.
+    /// Parses an exactly representable decimal from an ASCII byte slice.
+    ///
+    /// Fractional digits beyond the target scale are accepted only when they
+    /// are zero. This method never rounds.
     ///
     /// # Example
-    /// ```no_run
+    /// ```
     /// use decimal64::{DecimalU64, U2};
     ///
     /// let value = DecimalU64::<U2>::from_slice(b"12.34").unwrap();
@@ -89,39 +215,97 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     /// ```
     #[inline]
     pub const fn from_slice(bytes: &[u8]) -> Result<Self, Error> {
-        let mut unscaled: u64 = 0;
-        let mut fractional_part_flag: u8 = 0;
-        let mut scale_counter: u8 = 0;
+        if bytes.is_empty() {
+            return Err(Error::InvalidInput(InvalidInputKind::Empty));
+        }
+
         let mut index: usize = 0;
+
+        match bytes[0] {
+            b'-' => return Err(Error::InvalidInput(InvalidInputKind::NegativeNumber)),
+            b'+' => index = 1,
+            _ => {}
+        }
+
+        let input_len = bytes.len() - index;
+        let scale = S::SCALE as usize;
+
+        // Fixed-scale wire formats are common in market data. When the point
+        // is exactly where the target scale requires it, parse both fields
+        // independently and perform only two final overflow checks.
+        if scale != 0 && input_len > scale {
+            let decimal_point = bytes.len() - scale - 1;
+            if bytes[decimal_point] == b'.' && decimal_point - index <= 19 {
+                return Self::from_exact_scale_slice(bytes, index, decimal_point);
+            }
+        }
+
+        // Any decimal with at most 19 effective digits fits in a `u64`. The
+        // input length is a conservative upper bound for its digit count, so
+        // these inputs need no overflow checks at all. `ScaleMetrics` is
+        // sealed to U0–U8, making this subtraction safe.
+        if input_len <= 19 - scale {
+            return Self::from_short_slice::<false>(bytes, index);
+        }
+
+        // Up to 19 input digits also fit in the accumulator. Only the final
+        // scale adjustment can overflow, reducing the hot loop to unchecked
+        // arithmetic and a single checked multiplication.
+        if input_len <= 19 {
+            return Self::from_short_slice::<true>(bytes, index);
+        }
+
+        let mut unscaled: u64 = 0;
+        let mut fractional_digits: usize = 0;
+        let mut seen_decimal_point = false;
+        let mut seen_digit = false;
 
         while index < bytes.len() {
             let byte = bytes[index];
             match byte {
                 b'0'..=b'9' => {
+                    seen_digit = true;
+                    let digit = (byte - b'0') as u64;
+
+                    if seen_decimal_point && fractional_digits == S::SCALE as usize {
+                        if digit != 0 {
+                            return Err(Error::InvalidInput(InvalidInputKind::PrecisionLoss));
+                        }
+                        index += 1;
+                        continue;
+                    }
+
                     let next = match unscaled.checked_mul(10) {
                         Some(value) => value,
                         None => return Err(Error::Overflow),
                     };
-                    let digit = (byte - b'0') as u64;
                     unscaled = match next.checked_add(digit) {
                         Some(value) => value,
                         None => return Err(Error::Overflow),
                     };
 
-                    scale_counter += fractional_part_flag;
+                    if seen_decimal_point {
+                        fractional_digits += 1;
+                    }
                 }
-                b'.' => fractional_part_flag = 1,
-                other => return Err(Error::InvalidInput(InvalidInputKind::InvalidCharacter(other as char))),
+                b'.' => {
+                    if seen_decimal_point {
+                        return Err(Error::InvalidInput(InvalidInputKind::MultipleDecimalPoints));
+                    }
+                    seen_decimal_point = true;
+                }
+                other => return Err(Error::InvalidInput(InvalidInputKind::InvalidByte(other))),
             }
 
             index += 1;
         }
 
-        let remaining_scale = match S::SCALE.checked_sub(scale_counter) {
-            Some(remaining_scale) => remaining_scale,
-            None => return Err(Error::Overflow),
-        };
-        let factor = SCALE_FACTORS[remaining_scale as usize];
+        if !seen_digit {
+            return Err(Error::InvalidInput(InvalidInputKind::MissingDigits));
+        }
+
+        let remaining_scale = S::SCALE as usize - fractional_digits;
+        let factor = SCALE_FACTORS[remaining_scale];
         let unscaled = match unscaled.checked_mul(factor) {
             Some(unscaled) => unscaled,
             None => return Err(Error::Overflow),
@@ -130,10 +314,122 @@ impl<S: ScaleMetrics> DecimalU64<S> {
         Ok(Self(unscaled, PhantomData))
     }
 
-    /// Parses a decimal from a UTF-8 string slice.
+    #[inline(always)]
+    const fn from_exact_scale_slice(bytes: &[u8], index: usize, decimal_point: usize) -> Result<Self, Error> {
+        let integer_digits = decimal_point - index;
+        let integer = if integer_digits <= 8 {
+            parse_up_to_eight_digits(bytes, index, integer_digits)
+        } else {
+            parse_up_to_nineteen_digits(bytes, index, integer_digits)
+        };
+        let integer = match integer {
+            Some(integer) => integer,
+            None => return Err(invalid_digits(bytes, index, decimal_point)),
+        };
+
+        let fraction_index = decimal_point + 1;
+        let fraction = match parse_up_to_eight_digits(bytes, fraction_index, S::SCALE as usize) {
+            Some(fraction) => fraction,
+            None => return Err(invalid_digits(bytes, fraction_index, bytes.len())),
+        };
+
+        let unscaled = match integer.checked_mul(S::SCALE_FACTOR) {
+            Some(unscaled) => unscaled,
+            None => return Err(Error::Overflow),
+        };
+        let unscaled = match unscaled.checked_add(fraction) {
+            Some(unscaled) => unscaled,
+            None => return Err(Error::Overflow),
+        };
+        Ok(Self(unscaled, PhantomData))
+    }
+
+    #[inline(always)]
+    const fn from_short_slice<const CHECK_SCALE_OVERFLOW: bool>(bytes: &[u8], mut index: usize) -> Result<Self, Error> {
+        if bytes.len() - index == 8 {
+            if let Some(integer) = parse_eight_digits(bytes, index) {
+                let unscaled = integer as u64 * S::SCALE_FACTOR;
+                return Ok(Self(unscaled, PhantomData));
+            }
+        }
+
+        let mut unscaled: u64 = 0;
+        let mut seen_digits = 0usize;
+        let mut seen_decimal_point = false;
+
+        while index < bytes.len() {
+            let byte = bytes[index];
+            let digit = byte.wrapping_sub(b'0');
+            if digit <= 9 {
+                unscaled = unscaled * 10 + digit as u64;
+                seen_digits += 1;
+                index += 1;
+            } else if byte == b'.' {
+                seen_decimal_point = true;
+                index += 1;
+                break;
+            } else {
+                return Err(Error::InvalidInput(InvalidInputKind::InvalidByte(byte)));
+            }
+        }
+
+        let mut fractional_digits = 0usize;
+        if seen_decimal_point {
+            let remaining = bytes.len() - index;
+            if remaining <= S::SCALE as usize {
+                if let Some(fraction) = parse_up_to_eight_digits(bytes, index, remaining) {
+                    unscaled = unscaled * SCALE_FACTORS[remaining] + fraction;
+                    fractional_digits = remaining;
+                    seen_digits += remaining;
+                    index += remaining;
+                }
+            }
+
+            while index < bytes.len() {
+                let byte = bytes[index];
+                let digit = byte.wrapping_sub(b'0');
+                if digit > 9 {
+                    if byte == b'.' {
+                        return Err(Error::InvalidInput(InvalidInputKind::MultipleDecimalPoints));
+                    }
+                    return Err(Error::InvalidInput(InvalidInputKind::InvalidByte(byte)));
+                }
+
+                seen_digits += 1;
+                if fractional_digits < S::SCALE as usize {
+                    unscaled = unscaled * 10 + digit as u64;
+                    fractional_digits += 1;
+                } else if digit != 0 {
+                    return Err(Error::InvalidInput(InvalidInputKind::PrecisionLoss));
+                }
+                index += 1;
+            }
+        }
+
+        if seen_digits == 0 {
+            return Err(Error::InvalidInput(InvalidInputKind::MissingDigits));
+        }
+
+        let remaining_scale = S::SCALE as usize - fractional_digits;
+        let factor = SCALE_FACTORS[remaining_scale];
+        let unscaled = if CHECK_SCALE_OVERFLOW {
+            match unscaled.checked_mul(factor) {
+                Some(unscaled) => unscaled,
+                None => return Err(Error::Overflow),
+            }
+        } else {
+            unscaled * factor
+        };
+        Ok(Self(unscaled, PhantomData))
+    }
+
+    /// Parses an exactly representable decimal from a UTF-8 string slice.
+    ///
+    /// Fractional digits beyond the target scale are accepted only when they
+    /// are zero. This method never rounds.
     ///
     /// # Example
-    /// ```no_run
+    /// ```
     /// use decimal64::{DecimalU64, U2};
     ///
     /// let value = DecimalU64::<U2>::from_str("12.34").unwrap();
@@ -145,9 +441,8 @@ impl<S: ScaleMetrics> DecimalU64<S> {
 
     /// Converts this decimal to `f64`.
     ///
-    /// ## Examples
-    /// ```no_run
-    /// use std::str::FromStr;
+    /// # Examples
+    /// ```
     /// use decimal64::{DecimalU64, U2};
     ///
     /// let value = DecimalU64::<U2>::from_str("12.34").unwrap();
@@ -160,9 +455,9 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     /// Creates a decimal from `f64`, rounding half-up at the target scale.
     /// Returns error on invalid input or overflow.
     ///
-    /// ## Examples
+    /// # Examples
     /// No rounding.
-    /// ```no_run
+    /// ```
     /// use decimal64::{DecimalU64, U3};
     ///
     /// let value = DecimalU64::<U3>::from_f64(12.345).unwrap();
@@ -170,7 +465,7 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     /// ```
     ///
     /// With rounding.
-    /// ```no_run
+    /// ```
     /// use decimal64::{DecimalU64, U2};
     ///
     /// let value = DecimalU64::<U2>::from_f64(12.345).unwrap();
@@ -188,7 +483,12 @@ impl<S: ScaleMetrics> DecimalU64<S> {
         let frac_bits = bits & MANTISSA_MASK;
 
         if exp_bits == EXP_BITS as u16 {
-            return Err(Error::InvalidInput(InvalidInputKind::InfiniteNumber));
+            let kind = if frac_bits == 0 {
+                InvalidInputKind::InfiniteNumber
+            } else {
+                InvalidInputKind::NotANumber
+            };
+            return Err(Error::InvalidInput(kind));
         }
         if sign == 1 && (exp_bits != 0 || frac_bits != 0) {
             return Err(Error::InvalidInput(InvalidInputKind::NegativeNumber));
@@ -246,10 +546,14 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     /// Rescales this decimal to a different scale, returning an error on overflow.
     /// Downscaling rounds half-up when fractional digits are dropped.
     ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Overflow`] when the value cannot be represented at the
+    /// target scale.
+    ///
     /// # Example
     /// Scale up (will error on overflow).
-    /// ```no_run
-    /// use std::str::FromStr;
+    /// ```
     /// use decimal64::{DecimalU64, U2, U4};
     ///
     /// let amount = DecimalU64::<U2>::from_str("12.34").unwrap();
@@ -257,22 +561,20 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     /// assert_eq!("12.3400", upscaled.to_string());
     /// ```
     ///
-    /// Scale down (can result in precision loss).
-    /// ```no_run
-    /// use std::str::FromStr;
+    /// Scale down (rounds half-up).
+    /// ```
     /// use decimal64::{DecimalU64, U2, U4};
     ///
     /// let amount = DecimalU64::<U4>::from_str("1.2050").unwrap();
     /// let downscaled = amount.rescale::<U2>().unwrap();
     /// assert_eq!("1.21", downscaled.to_string());
     /// ```
-    pub const fn rescale<T: ScaleMetrics>(&self) -> Result<DecimalU64<T>, self::Error> {
-        if T::SCALE >= S::SCALE {
-            // upscale
-            let factor = match 10u64.checked_pow((T::SCALE - S::SCALE) as u32) {
-                Some(value) => value,
-                None => return Err(Error::Overflow),
-            };
+    #[inline]
+    pub const fn rescale<T: ScaleMetrics>(self) -> Result<DecimalU64<T>, Error> {
+        if T::SCALE == S::SCALE {
+            Ok(DecimalU64::<T>::new(self.0))
+        } else if T::SCALE > S::SCALE {
+            let factor = SCALE_FACTORS[(T::SCALE - S::SCALE) as usize];
             let unscaled = match self.0.checked_mul(factor) {
                 Some(value) => value,
                 None => return Err(Error::Overflow),
@@ -280,23 +582,14 @@ impl<S: ScaleMetrics> DecimalU64<S> {
 
             Ok(DecimalU64::<T>::new(unscaled))
         } else {
-            // downscale
-            let factor = match 10u64.checked_pow((S::SCALE - T::SCALE) as u32) {
-                Some(value) => value,
-                None => return Err(Error::Overflow),
-            };
+            let factor = SCALE_FACTORS[(S::SCALE - T::SCALE) as usize];
             let truncated = self.0 / factor;
             let remainder = self.0 % factor;
-            let mut rounded = truncated;
-            if remainder != 0 {
-                let double = (remainder as u128) * 2;
-                if double >= factor as u128 {
-                    rounded = match truncated.checked_add(1) {
-                        Some(value) => value,
-                        None => return Err(Error::Overflow),
-                    };
-                }
-            }
+            let rounded = if remainder != 0 && remainder >= factor / 2 {
+                truncated + 1
+            } else {
+                truncated
+            };
             Ok(DecimalU64::<T>::new(rounded))
         }
     }
@@ -304,9 +597,8 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     /// Split `unscaled` value into integer and fractional parts.
     ///
     /// # Example
-    /// ```no_run
+    /// ```
     ///
-    /// use std::str::FromStr;
     /// use decimal64::{DecimalU64, U6};
     ///
     /// let (int_part, frac_part) = DecimalU64::<U6>::from_str("123.45").unwrap().split();
@@ -314,150 +606,317 @@ impl<S: ScaleMetrics> DecimalU64<S> {
     /// assert_eq!(450000, frac_part);
     /// ```
     #[inline]
-    pub const fn split(&self) -> (u64, u64) {
+    pub const fn split(self) -> (u64, u64) {
         let integer_part = self.0 / S::SCALE_FACTOR;
         let fractional_part = self.0 % S::SCALE_FACTOR;
         (integer_part, fractional_part)
     }
 
-    #[inline]
-    /// Writes this decimal into `buffer` and returns the number of bytes written.  The buffer must
-    /// be at least `S::REQUIRED_BUFFER_LEN` bytes. Output includes trailing zeros to match the scale.
+    /// Writes this decimal into `buffer`, including trailing zeros, and returns
+    /// the number of bytes written.
     ///
-    /// If you required trimmed output, use [`Self::write_to_trimmed`].
+    /// Use [`Self::write_to_trimmed`] to omit trailing fractional zeros or
+    /// [`Self::try_write_to`] to handle an insufficient buffer without panicking.
     ///
-    /// ## Examples
-    /// No trailing zeroes.
-    /// ```no_run
-    /// use std::str::FromStr;
-    /// use decimal64::{DecimalU64, ScaleMetrics, U2};
+    /// # Panics
     ///
-    /// let value = DecimalU64::<U2>::from_str("12.34").unwrap();
-    /// let mut buffer = [0u8; U2::REQUIRED_BUFFER_LEN];
-    /// let len = value.write_to(&mut buffer);
-    /// assert_eq!("12.34", std::str::from_utf8(&buffer[..len]).unwrap());
+    /// Panics if `buffer` is too small for this value.
+    ///
+    /// # Examples
+    ///
     /// ```
-    /// With trailing zeroes
-    /// ```no_run
-    /// use std::str::FromStr;
-    /// use decimal64::{DecimalU64, ScaleMetrics, U2};
+    /// use decimal64::{DecimalU64, U2};
     ///
     /// let value = DecimalU64::<U2>::from_str("1.2").unwrap();
-    /// let mut buffer = [0u8; U2::REQUIRED_BUFFER_LEN];
+    /// let mut buffer = [0u8; 4];
     /// let len = value.write_to(&mut buffer);
     /// assert_eq!("1.20", std::str::from_utf8(&buffer[..len]).unwrap());
     /// ```
+    #[must_use]
+    #[inline]
     pub fn write_to(&self, buffer: &mut [u8]) -> usize {
-        #[cold]
-        #[inline(never)]
-        fn insufficient_buffer_len(len: usize, required: usize) -> ! {
-            panic!("provided buffer length {} is too small, requires at least {} bytes", len, required);
+        match self.try_write_to(buffer) {
+            Ok(len) => len,
+            Err(error) => panic!("{error}"),
         }
+    }
 
-        // ensure the provided buffer has enough length to write the max value
-        if S::REQUIRED_BUFFER_LEN > buffer.len() {
-            insufficient_buffer_len(buffer.len(), S::REQUIRED_BUFFER_LEN)
-        }
-
-        // Compute the scale factor: 10^PRECISION.
-        let (int_part, frac_part) = self.split();
-        let mut pos = 0;
-
-        // Write the integer part.
-        if int_part == 0 {
-            // SAFETY we already checked the destination buffer is of sufficient size
-            unsafe {
-                *buffer.get_unchecked_mut(pos) = b'0';
-            }
-            pos += 1;
-        } else {
-            let mut tmp = int_part;
-            let mut digit_count = 0;
-            while tmp != 0 {
-                digit_count += 1;
-                tmp /= 10;
-            }
-            pos += digit_count;
-            let mut idx = pos;
-            tmp = int_part;
-            while tmp != 0 {
-                idx -= 1;
-                // SAFETY we already checked the destination buffer is of sufficient size
-                unsafe {
-                    *buffer.get_unchecked_mut(idx) = b'0' + (tmp % 10) as u8;
-                }
-                tmp /= 10;
-            }
-        }
-
-        // If there is a fractional part, write the decimal point and fractional digits.
-        if S::SCALE > 0 {
-            // SAFETY we already checked the destination buffer is of sufficient size
-            unsafe {
-                *buffer.get_unchecked_mut(pos) = b'.';
-            }
-            pos += 1;
-            // Start with the highest power of 10 for the fractional part.
-            let mut divisor = 10u64.pow((S::SCALE - 1) as u32);
-            let mut frac = frac_part;
-            for _ in 0..S::SCALE {
-                let digit = frac / divisor;
-                // SAFETY we already checked the destination buffer is of sufficient size
-                unsafe {
-                    *buffer.get_unchecked_mut(pos) = b'0' + (digit as u8);
-                }
-                pos += 1;
-                frac %= divisor;
-                divisor /= 10;
-            }
-        }
-
-        pos
+    /// Tries to write this decimal into `buffer`, including trailing zeros.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BufferTooSmall`] if `buffer` cannot hold this value. The
+    /// buffer is not modified on error.
+    #[inline]
+    pub fn try_write_to(&self, buffer: &mut [u8]) -> Result<usize, BufferTooSmall> {
+        let (integer, fractional) = self.split();
+        Self::try_write_parts(buffer, integer, fractional, S::SCALE as usize)
     }
 
     /// Writes this decimal into `buffer` without trailing fractional zeros.
     ///
-    /// If you required untrimmed output, use [`Self::write_to`].
+    /// Use [`Self::write_to`] to retain the full scale or
+    /// [`Self::try_write_to_trimmed`] to handle an insufficient buffer without
+    /// panicking.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `buffer` is too small for the trimmed value.
     ///
     /// # Example
-    /// ```no_run
-    /// use std::str::FromStr;
+    ///
+    /// ```
     /// use decimal64::{DecimalU64, U4};
     ///
     /// let value = DecimalU64::<U4>::from_str("12.3400").unwrap();
-    /// let mut buffer = [0u8; 32];
+    /// let mut buffer = [0u8; 5];
     /// let len = value.write_to_trimmed(&mut buffer);
     /// assert_eq!("12.34", std::str::from_utf8(&buffer[..len]).unwrap());
     /// ```
+    #[must_use]
+    #[inline]
     pub fn write_to_trimmed(&self, buffer: &mut [u8]) -> usize {
-        let len = self.write_to(buffer);
-        if S::SCALE == 0 {
-            return len;
+        match self.try_write_to_trimmed(buffer) {
+            Ok(len) => len,
+            Err(error) => panic!("{error}"),
+        }
+    }
+
+    /// Tries to write this decimal into `buffer` without trailing fractional
+    /// zeros.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BufferTooSmall`] if `buffer` cannot hold the trimmed value.
+    /// The buffer is not modified on error.
+    #[inline]
+    pub fn try_write_to_trimmed(&self, buffer: &mut [u8]) -> Result<usize, BufferTooSmall> {
+        let (integer, mut fractional) = self.split();
+        let mut fractional_digits = S::SCALE as usize;
+        while fractional_digits != 0 && fractional % 10 == 0 {
+            fractional /= 10;
+            fractional_digits -= 1;
+        }
+        Self::try_write_parts(buffer, integer, fractional, fractional_digits)
+    }
+
+    #[inline]
+    fn try_write_parts(
+        buffer: &mut [u8],
+        integer: u64,
+        mut fractional: u64,
+        fractional_digits: usize,
+    ) -> Result<usize, BufferTooSmall> {
+        let integer_digits = if integer == 0 { 1 } else { integer.ilog10() as usize + 1 };
+        let required = integer_digits
+            + if fractional_digits == 0 {
+                0
+            } else {
+                fractional_digits + 1
+            };
+        if buffer.len() < required {
+            return Err(BufferTooSmall {
+                required,
+                provided: buffer.len(),
+            });
         }
 
-        let mut end = len;
-        while end > 0 {
-            // SAFETY: end > 0 and end <= len <= buffer.len()
-            let byte = unsafe { *buffer.get_unchecked(end - 1) };
-            if byte != b'0' {
-                break;
-            }
-            end -= 1;
+        let mut cursor = integer_digits;
+        let mut integer = integer;
+
+        while integer >= 100 {
+            let pair = (integer % 100) as usize;
+            integer /= 100;
+            cursor -= 2;
+            write_digit_pair(buffer, cursor, pair);
         }
-        if end > 0 {
-            // SAFETY: end > 0 and end <= len <= buffer.len()
-            let byte = unsafe { *buffer.get_unchecked(end - 1) };
-            if byte == b'.' {
-                end -= 1;
+
+        if integer < 10 {
+            cursor -= 1;
+            // SAFETY: the buffer length was checked above.
+            unsafe {
+                *buffer.get_unchecked_mut(cursor) = b'0' + integer as u8;
+            }
+        } else {
+            cursor -= 2;
+            write_digit_pair(buffer, cursor, integer as usize);
+        }
+
+        if fractional_digits == 0 {
+            return Ok(integer_digits);
+        }
+
+        // SAFETY: the buffer length was checked above.
+        unsafe {
+            *buffer.get_unchecked_mut(integer_digits) = b'.';
+        }
+
+        let fractional_start = integer_digits + 1;
+        let end = fractional_start + fractional_digits;
+        cursor = end;
+        let mut remaining = fractional_digits;
+
+        while remaining >= 2 {
+            let pair = (fractional % 100) as usize;
+            fractional /= 100;
+            cursor -= 2;
+            write_digit_pair(buffer, cursor, pair);
+            remaining -= 2;
+        }
+
+        if remaining != 0 {
+            cursor -= 1;
+            // SAFETY: the buffer length was checked above.
+            unsafe {
+                *buffer.get_unchecked_mut(cursor) = b'0' + fractional as u8;
             }
         }
 
-        end
+        Ok(end)
+    }
+}
+
+impl<S: ScaleMetrics> std::str::FromStr for DecimalU64<S> {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_slice(s.as_bytes())
+    }
+}
+
+impl<S: ScaleMetrics> TryFrom<f64> for DecimalU64<S> {
+    type Error = Error;
+
+    fn try_from(value: f64) -> Result<Self, Self::Error> {
+        Self::from_f64(value)
+    }
+}
+
+impl<S: ScaleMetrics> From<DecimalU64<S>> for f64 {
+    fn from(value: DecimalU64<S>) -> Self {
+        value.to_f64()
     }
 }
 
 mod private {
     pub trait Sealed {}
+}
+
+/// Parses eight validated ASCII digits using packed integer arithmetic.
+#[inline(always)]
+const fn parse_eight_digits(bytes: &[u8], index: usize) -> Option<u32> {
+    let value = u64::from_le_bytes([
+        bytes[index],
+        bytes[index + 1],
+        bytes[index + 2],
+        bytes[index + 3],
+        bytes[index + 4],
+        bytes[index + 5],
+        bytes[index + 6],
+        bytes[index + 7],
+    ]);
+
+    let upper = value.wrapping_add(0x4646_4646_4646_4646);
+    let lower = value.wrapping_sub(0x3030_3030_3030_3030);
+    if ((upper | lower) & 0x8080_8080_8080_8080) != 0 {
+        return None;
+    }
+
+    let value = lower;
+    let value = (value.wrapping_mul(10).wrapping_add(value >> 8)) & 0x00ff_00ff_00ff_00ff;
+    let value = (value.wrapping_mul(100).wrapping_add(value >> 16)) & 0x0000_ffff_0000_ffff;
+    let value = value.wrapping_mul(10_000).wrapping_add(value >> 32);
+    Some(value as u32)
+}
+
+#[inline(always)]
+const fn parse_up_to_eight_digits(bytes: &[u8], index: usize, len: usize) -> Option<u64> {
+    match len {
+        0 => Some(0),
+        1 => parse_digits::<1>(bytes, index),
+        2 => parse_digits::<2>(bytes, index),
+        3 => parse_digits::<3>(bytes, index),
+        4 => parse_digits::<4>(bytes, index),
+        5 => parse_digits::<5>(bytes, index),
+        6 => parse_digits::<6>(bytes, index),
+        7 => parse_digits::<7>(bytes, index),
+        8 => match parse_eight_digits(bytes, index) {
+            Some(value) => Some(value as u64),
+            None => None,
+        },
+        _ => None,
+    }
+}
+
+#[inline(never)]
+const fn parse_up_to_nineteen_digits(bytes: &[u8], index: usize, len: usize) -> Option<u64> {
+    if len > 19 {
+        return None;
+    }
+    if len <= 8 {
+        return parse_up_to_eight_digits(bytes, index, len);
+    }
+
+    if len <= 16 {
+        let high_len = len - 8;
+        let high = match parse_up_to_eight_digits(bytes, index, high_len) {
+            Some(value) => value,
+            None => return None,
+        };
+        let low = match parse_eight_digits(bytes, index + high_len) {
+            Some(value) => value as u64,
+            None => return None,
+        };
+        return Some(high * 100_000_000 + low);
+    }
+
+    let high_len = len - 16;
+    let high = match parse_up_to_eight_digits(bytes, index, high_len) {
+        Some(value) => value,
+        None => return None,
+    };
+    let middle = match parse_eight_digits(bytes, index + high_len) {
+        Some(value) => value as u64,
+        None => return None,
+    };
+    let low = match parse_eight_digits(bytes, index + high_len + 8) {
+        Some(value) => value as u64,
+        None => return None,
+    };
+    Some(high * 10_000_000_000_000_000 + middle * 100_000_000 + low)
+}
+
+#[inline(always)]
+const fn parse_digits<const LEN: usize>(bytes: &[u8], index: usize) -> Option<u64> {
+    let mut value = 0u64;
+    let mut offset = 0usize;
+    while offset < LEN {
+        let digit = bytes[index + offset].wrapping_sub(b'0');
+        if digit > 9 {
+            return None;
+        }
+        value = value * 10 + digit as u64;
+        offset += 1;
+    }
+    Some(value)
+}
+
+#[cold]
+#[inline(never)]
+const fn invalid_digits(bytes: &[u8], mut index: usize, end: usize) -> Error {
+    while index < end {
+        let byte = bytes[index];
+        if byte.wrapping_sub(b'0') > 9 {
+            return if byte == b'.' {
+                Error::InvalidInput(InvalidInputKind::MultipleDecimalPoints)
+            } else {
+                Error::InvalidInput(InvalidInputKind::InvalidByte(byte))
+            };
+        }
+        index += 1;
+    }
+
+    unreachable!()
 }
 
 #[cfg(test)]
@@ -473,16 +932,162 @@ mod tests {
 
     #[test]
     fn should_parse_from_bytes() -> anyhow::Result<()> {
-        assert_eq!(18446744073709551615, DecimalU64::<U0>::from_str("18446744073709551615")?.0);
-        assert_eq!(18446744073709551615, DecimalU64::<U8>::from_str("184467440737.09551615")?.0);
+        assert_eq!(
+            18446744073709551615,
+            DecimalU64::<U0>::from_str("18446744073709551615")?.0
+        );
+        assert_eq!(
+            18446744073709551615,
+            DecimalU64::<U8>::from_str("184467440737.09551615")?.0
+        );
         assert_eq!(12345000000, DecimalU64::<U8>::from_str("123.45000000")?.0);
         assert_eq!(12300000000, DecimalU64::<U8>::from_str("123")?.0);
         assert_eq!(12300000000, DecimalU64::<U8>::from_str("123.")?.0);
         assert_eq!(12300000000, DecimalU64::<U8>::from_str("123.0")?.0);
-        assert_eq!(18446744073709551615, DecimalU64::<U8>::from_str("184467440737.09551615")?.0);
+        assert_eq!(
+            18446744073709551615,
+            DecimalU64::<U8>::from_str("184467440737.09551615")?.0
+        );
         assert_eq!(0, DecimalU64::<U8>::from_str("0.0")?.0);
         assert_eq!(0, DecimalU64::<U8>::from_str("0")?.0);
         Ok(())
+    }
+
+    #[test]
+    fn should_parse_only_exactly_representable_values() -> anyhow::Result<()> {
+        assert_eq!(
+            DecimalU64::<U2>::from_str("1.23")?,
+            DecimalU64::<U2>::from_str("1.2300")?
+        );
+        assert_eq!(DecimalU64::<U2>::from_str("0.50")?, DecimalU64::<U2>::from_str(".5")?);
+        assert_eq!(
+            DecimalU64::<U8>::from_str("0.12345678")?,
+            DecimalU64::<U8>::from_str(".12345678")?
+        );
+        assert_eq!(
+            DecimalU64::<U2>::from_str("1.23")?,
+            DecimalU64::<U2>::from_str("+1.23")?
+        );
+        assert_eq!(
+            DecimalU64::<U0>::MAX,
+            DecimalU64::<U0>::from_str("18446744073709551615.000")?
+        );
+        assert_eq!(DecimalU64::<U0>::ONE, DecimalU64::<U0>::from_str("1.0")?);
+
+        assert_eq!(
+            Err(Error::InvalidInput(InvalidInputKind::PrecisionLoss)),
+            DecimalU64::<U2>::from_str("1.2301")
+        );
+        assert_eq!(
+            Err(Error::InvalidInput(InvalidInputKind::PrecisionLoss)),
+            DecimalU64::<U0>::from_str("1.1")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_reject_malformed_input() {
+        assert_eq!(
+            Err(Error::InvalidInput(InvalidInputKind::Empty)),
+            DecimalU64::<U2>::from_str("")
+        );
+        assert_eq!(
+            Err(Error::InvalidInput(InvalidInputKind::MissingDigits)),
+            DecimalU64::<U2>::from_str(".")
+        );
+        assert_eq!(
+            Err(Error::InvalidInput(InvalidInputKind::MissingDigits)),
+            DecimalU64::<U2>::from_str("+")
+        );
+        assert_eq!(
+            Err(Error::InvalidInput(InvalidInputKind::MultipleDecimalPoints)),
+            DecimalU64::<U2>::from_str("1.2.3")
+        );
+        assert_eq!(
+            Err(Error::InvalidInput(InvalidInputKind::NegativeNumber)),
+            DecimalU64::<U2>::from_str("-1")
+        );
+        assert_eq!(
+            Err(Error::InvalidInput(InvalidInputKind::InvalidByte(b'e'))),
+            DecimalU64::<U2>::from_str("1e2")
+        );
+        assert_eq!(
+            Err(Error::InvalidInput(InvalidInputKind::InvalidByte(0xff))),
+            DecimalU64::<U2>::from_slice(&[b'1', 0xff])
+        );
+    }
+
+    #[test]
+    fn should_handle_more_than_u8_max_fractional_digits() {
+        let exact = format!("0.{}", "0".repeat(300));
+        assert_eq!(Ok(DecimalU64::<U8>::ZERO), DecimalU64::<U8>::from_str(&exact));
+
+        let inexact = format!("0.{}1", "0".repeat(300));
+        assert_eq!(
+            Err(Error::InvalidInput(InvalidInputKind::PrecisionLoss)),
+            DecimalU64::<U8>::from_str(&inexact)
+        );
+    }
+
+    #[test]
+    fn should_implement_std_from_str() -> anyhow::Result<()> {
+        let value: DecimalU64<U2> = "1.23".parse()?;
+        assert_eq!(DecimalU64::<U2>::new(123), value);
+        Ok(())
+    }
+
+    #[test]
+    fn should_parse_packed_ascii_digits() {
+        for expected in [0, 1, 12_345_678, 50_607_080, 99_999_999] {
+            let mut digits = [b'0'; 8];
+            let mut value = expected;
+            let mut index = digits.len();
+            while index != 0 {
+                index -= 1;
+                digits[index] += (value % 10) as u8;
+                value /= 10;
+            }
+            assert_eq!(Some(expected), parse_eight_digits(&digits, 0));
+        }
+
+        for index in 0..8 {
+            for invalid in 0..=u8::MAX {
+                if invalid.is_ascii_digit() {
+                    continue;
+                }
+                let mut digits = *b"12345678";
+                digits[index] = invalid;
+                assert_eq!(None, parse_eight_digits(&digits, 0));
+            }
+        }
+    }
+
+    #[test]
+    fn should_round_trip_optimized_parsing_paths() {
+        fn assert_round_trips<S: ScaleMetrics>() {
+            for raw in [0, 1, S::SCALE_FACTOR, u64::MAX] {
+                let encoded = DecimalU64::<S>::new(raw).to_string();
+                assert_eq!(raw, DecimalU64::<S>::from_str(&encoded).unwrap().0);
+            }
+
+            let mut raw = 0x9e37_79b9_7f4a_7c15u64;
+            for _ in 0..1_000 {
+                raw = raw.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                let encoded = DecimalU64::<S>::new(raw).to_string();
+                assert_eq!(raw, DecimalU64::<S>::from_str(&encoded).unwrap().0);
+            }
+        }
+
+        assert_round_trips::<U0>();
+        assert_round_trips::<U1>();
+        assert_round_trips::<U2>();
+        assert_round_trips::<U3>();
+        assert_round_trips::<U4>();
+        assert_round_trips::<U5>();
+        assert_round_trips::<U6>();
+        assert_round_trips::<U7>();
+        assert_round_trips::<U8>();
     }
 
     #[test]
@@ -588,6 +1193,39 @@ mod tests {
     }
 
     #[test]
+    fn should_try_write_using_the_actual_output_length() {
+        let value = DecimalU64::<U4>::from_str("12.3400").unwrap();
+
+        let mut fixed_buffer = [0xa5; 5];
+        let unchanged = fixed_buffer;
+        assert_eq!(
+            value.try_write_to(&mut fixed_buffer),
+            Err(BufferTooSmall {
+                required: 7,
+                provided: 5,
+            })
+        );
+        assert_eq!(fixed_buffer, unchanged);
+
+        let mut trimmed_buffer = [0u8; 5];
+        let len = value.try_write_to_trimmed(&mut trimmed_buffer).unwrap();
+        assert_eq!("12.34", std::str::from_utf8(&trimmed_buffer[..len]).unwrap());
+    }
+
+    #[test]
+    fn should_try_write_zero_to_its_actual_output_length() {
+        let mut fixed_buffer = [0u8; 10];
+        let len = DecimalU64::<U8>::ZERO.try_write_to(&mut fixed_buffer).unwrap();
+        assert_eq!("0.00000000", std::str::from_utf8(&fixed_buffer[..len]).unwrap());
+
+        let mut trimmed_buffer = [0u8; 1];
+        let len = DecimalU64::<U8>::ZERO
+            .try_write_to_trimmed(&mut trimmed_buffer)
+            .unwrap();
+        assert_eq!("0", std::str::from_utf8(&trimmed_buffer[..len]).unwrap());
+    }
+
+    #[test]
     fn should_display_to_string() -> anyhow::Result<()> {
         assert_eq!("123.450000", DecimalU64::<U6>::from_str("123.45")?.to_string());
         assert_eq!("123.45", DecimalU64::<U2>::from_str("123.45")?.to_string());
@@ -629,6 +1267,12 @@ mod tests {
         assert_eq!("0.00", DecimalU64::<U2>::ZERO.to_string());
         assert_eq!("0.0", DecimalU64::<U1>::ZERO.to_string());
         assert_eq!("0", DecimalU64::<U0>::ZERO.to_string());
+    }
+
+    #[test]
+    fn should_use_constant_min() {
+        assert_eq!(DecimalU64::<U0>::MIN, DecimalU64::ZERO);
+        assert_eq!(DecimalU64::<U8>::MIN, DecimalU64::ZERO);
     }
 
     #[test]
@@ -693,13 +1337,13 @@ mod tests {
     #[should_panic(expected = "provided buffer length 1 is too small, requires at least 21 bytes")]
     fn should_panic_if_buffer_too_small() {
         let mut buffer = [0u8; 1];
-        DecimalU64::<U8>::MAX.write_to(&mut buffer);
+        let _ = DecimalU64::<U8>::MAX.write_to(&mut buffer);
     }
 
     #[test]
     fn should_write_if_buffer_is_of_exact_size() {
         let mut buffer = [0u8; U8::REQUIRED_BUFFER_LEN];
-        DecimalU64::<U8>::MAX.write_to(&mut buffer);
+        let _ = DecimalU64::<U8>::MAX.write_to(&mut buffer);
     }
 }
 
@@ -707,7 +1351,7 @@ mod tests {
 mod rescale_tests {
     use crate::error::Error;
     use crate::{DecimalU64, ScaleMetrics, U0, U1, U2, U3, U4, U5, U7, U8};
-    use rstest_macros::rstest;
+    use rstest::rstest;
 
     // Generic rescale test for checked rescale when no rounding is needed.
     fn rescale<S1: ScaleMetrics, S2: ScaleMetrics>(s: &'static str) {
@@ -768,7 +1412,10 @@ mod rescale_tests {
         let down: DecimalU64<U2> = up.rescale().unwrap();
 
         // Compare decimal values, not unscaled
-        assert_eq!(d.to_string().trim_end_matches('0'), down.to_string().trim_end_matches('0'));
+        assert_eq!(
+            d.to_string().trim_end_matches('0'),
+            down.to_string().trim_end_matches('0')
+        );
     }
 
     #[rstest]
@@ -829,6 +1476,15 @@ mod rescale_tests {
         let result: Result<DecimalU64<U1>, Error> = too_big.rescale();
         assert!(matches!(result, Err(Error::Overflow)));
     }
+
+    #[test]
+    fn should_rescale_in_const_contexts() {
+        const UPSCALED: Result<DecimalU64<U4>, Error> = DecimalU64::<U2>::new(123).rescale();
+        const DOWNSCALED: Result<DecimalU64<U2>, Error> = DecimalU64::<U3>::new(1235).rescale();
+
+        assert_eq!(DecimalU64::<U4>::new(12_300), UPSCALED.unwrap());
+        assert_eq!(DecimalU64::<U2>::new(124), DOWNSCALED.unwrap());
+    }
 }
 
 #[cfg(test)]
@@ -850,6 +1506,14 @@ mod f64_tests {
     }
 
     #[test]
+    fn should_convert_using_standard_traits() -> anyhow::Result<()> {
+        let decimal = DecimalU64::<U2>::try_from(12.25)?;
+        let value = f64::from(decimal);
+        assert_eq!(12.25, value);
+        Ok(())
+    }
+
+    #[test]
     fn should_create_from_f64_as_const() {
         const VALUE: Result<DecimalU64<U2>, Error> = DecimalU64::from_f64(12.25);
         assert_eq!("12.25", VALUE.unwrap().to_string());
@@ -865,12 +1529,24 @@ mod f64_tests {
     #[test]
     fn should_error_on_from_f64_infinity() {
         let err = DecimalU64::<U2>::from_f64(f64::INFINITY);
-        assert!(matches!(err, Err(Error::InvalidInput(InvalidInputKind::InfiniteNumber))));
+        assert!(matches!(
+            err,
+            Err(Error::InvalidInput(InvalidInputKind::InfiniteNumber))
+        ));
+    }
+
+    #[test]
+    fn should_error_on_from_f64_nan() {
+        let err = DecimalU64::<U2>::from_f64(f64::NAN);
+        assert!(matches!(err, Err(Error::InvalidInput(InvalidInputKind::NotANumber))));
     }
 
     #[test]
     fn should_error_on_from_f64_negative() {
         let err = DecimalU64::<U2>::from_f64(-1.0);
-        assert!(matches!(err, Err(Error::InvalidInput(InvalidInputKind::NegativeNumber))));
+        assert!(matches!(
+            err,
+            Err(Error::InvalidInput(InvalidInputKind::NegativeNumber))
+        ));
     }
 }

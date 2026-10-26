@@ -28,18 +28,20 @@ fn should_serialize_as_a_string_without_losing_scale() {
 }
 
 #[test]
-fn should_round_floating_point_input_at_the_target_scale() {
-    let value: DecimalU64<U2> = serde_json::from_str("12.345").unwrap();
-    assert_eq!("12.35", value.to_string());
+fn should_parse_string_input_exactly() {
+    let value: DecimalU64<U2> = serde_json::from_str(r#""12.34""#).unwrap();
+    assert_eq!("12.34", value.to_string());
+    assert!(serde_json::from_str::<DecimalU64<U2>>(r#""12.345""#).is_err());
 }
 
 #[test]
-fn should_reject_negative_numeric_input() {
-    let error = serde_json::from_str::<DecimalU64<U8>>("-1").unwrap_err();
-    assert!(error.to_string().contains("negative number"));
+fn should_reject_numeric_input() {
+    for input in ["12.345", "100", "-1"] {
+        assert!(serde_json::from_str::<DecimalU64<U8>>(input).is_err());
+    }
 }
 
 #[test]
-fn should_reject_integer_overflow_at_the_target_scale() {
-    assert!(serde_json::from_str::<DecimalU64<U8>>("18446744073709551615").is_err());
+fn should_reject_string_overflow_at_the_target_scale() {
+    assert!(serde_json::from_str::<DecimalU64<U8>>(r#""18446744073709551615""#).is_err());
 }
