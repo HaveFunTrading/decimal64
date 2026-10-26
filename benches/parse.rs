@@ -14,6 +14,11 @@ fn parse_benchmark(c: &mut Criterion) {
     u3.finish();
 
     let cases = [
+        ("integer_two", "12"),
+        ("integer_four", "1234"),
+        ("integer_five", "12345"),
+        ("fraction_two", "0.12"),
+        ("fraction_four", "0.1234"),
         ("compact", "123.456"),
         ("price_compact", "80500.32"),
         ("price_padded", "80500.32000000"),
@@ -50,13 +55,17 @@ fn format_benchmark(c: &mut Criterion) {
             black_box((&buffer, len));
         })
     });
+    group.bench_function("rust_decimal/array_string", |b| {
+        let dec = Decimal::from_str("80500.32000000").unwrap();
+        b.iter(|| black_box(black_box(dec).array_string()))
+    });
     group.bench_function("decimal64/to_string", |b| {
         let dec = DecimalU64::<U8>::from_str("123.456").unwrap();
-        b.iter(|| black_box(dec.to_string()))
+        b.iter(|| black_box(black_box(dec).to_string()))
     });
     group.bench_function("rust_decimal/to_string", |b| {
-        let dec = Decimal::from_str("123.456").unwrap();
-        b.iter(|| black_box(dec.to_string()))
+        let dec = Decimal::from_str("123.45600000").unwrap();
+        b.iter(|| black_box(black_box(dec).to_string()))
     });
     group.finish();
 }

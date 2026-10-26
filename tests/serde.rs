@@ -3,7 +3,7 @@
 mod common;
 
 use common::for_each_scale;
-use decimal64::{DecimalU64, U2, U8};
+use decimal64::{DecimalI64, DecimalU64, U0, U2, U8};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -50,6 +50,33 @@ fn should_reject_string_overflow_at_the_target_scale() {
     assert!(serde_json::from_str::<DecimalU64<U8>>(r#""18446744073709551615""#).is_err());
 }
 
+#[test]
+fn signed_values_serialize_and_deserialize_as_strings() {
+    let value = DecimalI64::<U2>::from_str("-12.34").unwrap();
+    let serialized = serde_json::to_string(&value).unwrap();
+    assert_eq!(serialized, r#""-12.34""#);
+    assert_eq!(serde_json::from_str::<DecimalI64<U2>>(&serialized).unwrap(), value);
+    assert!(serde_json::from_str::<DecimalI64<U2>>("-12.34").is_err());
+}
+
+#[test]
+fn signed_string_input_is_exact_and_rejects_numeric_tokens() {
+    assert_eq!(
+        serde_json::from_str::<DecimalI64<U2>>(r#""-12.34""#).unwrap(),
+        DecimalI64::new(-1_234)
+    );
+    assert!(serde_json::from_str::<DecimalI64<U2>>(r#""-12.345""#).is_err());
+    for input in ["-12.34", "0", "12.34"] {
+        assert!(serde_json::from_str::<DecimalI64<U2>>(input).is_err());
+    }
+}
+
+#[test]
+fn signed_string_input_checks_both_overflow_boundaries() {
+    assert!(serde_json::from_str::<DecimalI64<U0>>(r#""9223372036854775808""#).is_err());
+    assert!(serde_json::from_str::<DecimalI64<U0>>(r#""-9223372036854775809""#).is_err());
+}
+
 macro_rules! serde_suite {
     ($module:ident, $scale:ty, $digits:expr, $factor:expr, $max_len:expr) => {
         mod $module {
@@ -76,3 +103,34 @@ macro_rules! serde_suite {
 }
 
 for_each_scale!(serde_suite);
+
+mod signed {
+    use super::*;
+
+    macro_rules! serde_suite {
+        ($module:ident, $scale:ty, $digits:expr, $factor:expr, $max_len:expr) => {
+            mod $module {
+                use super::*;
+                use crate::common::reference::format_signed_fixed;
+
+                type Decimal = DecimalI64<$scale>;
+
+                proptest! {
+                    #![proptest_config(ProptestConfig::with_cases(256))]
+
+                    #[test]
+                    fn string_representation_round_trips(raw in any::<i64>()) {
+                        let value = Decimal::new(raw);
+                        let expected = format_signed_fixed(raw, $digits, $factor);
+                        let serialized = serde_json::to_string(&value).unwrap();
+
+                        prop_assert_eq!(&serialized, &serde_json::to_string(&expected).unwrap());
+                        prop_assert_eq!(serde_json::from_str::<Decimal>(&serialized).unwrap(), value);
+                    }
+                }
+            }
+        };
+    }
+
+    for_each_scale!(serde_suite);
+}

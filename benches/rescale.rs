@@ -13,14 +13,14 @@ fn rescale_benchmark(c: &mut Criterion) {
 
     group.bench_function("decimal64_up", |b| {
         b.iter(|| {
-            let r: DecimalU64<U8> = black_box(&d_u2).rescale().unwrap();
+            let r: DecimalU64<U8> = black_box(d_u2).rescale().unwrap();
             black_box(r);
         })
     });
 
     group.bench_function("decimal64_down", |b| {
         b.iter(|| {
-            let r: DecimalU64<U2> = black_box(&d_u8).rescale().unwrap();
+            let r: DecimalU64<U2> = black_box(d_u8).rescale().unwrap();
             black_box(r);
         })
     });

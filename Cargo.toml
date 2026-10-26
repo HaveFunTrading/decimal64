@@ -3,7 +3,7 @@ name = "decimal64"
 version = "0.0.9"
 edition = "2024"
 license = "MIT"
-description = "Fast fixed point arithmetic that only uses u64 as internal representation."
+description = "Fast fixed-point arithmetic backed by u64 or i64."
 keywords = ["decimal", "fixed", "precision", "number", "low-latency"]
 categories = ["finance", "science", "data-structures", "mathematics", "parsing"]
 readme = "./README.md"
@@ -25,7 +25,7 @@ criterion = "0.5.1"
 num-bigint = "0.4.6"
 num-traits = "0.2.19"
 proptest = "1.11.0"
-rust_decimal = "1.36.0"
+rust_decimal = "1.43.0"
 rstest = "0.25.0"
 serde_json = "1.0.140"
 

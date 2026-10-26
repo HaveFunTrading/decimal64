@@ -20,7 +20,7 @@ pub enum Error {
     /// The input cannot be represented as a decimal.
     #[error("invalid input: {0}")]
     InvalidInput(InvalidInputKind),
-    /// The result exceeds the `u64` representation.
+    /// The result exceeds the backing integer representation.
     #[error("overflow")]
     Overflow,
 }

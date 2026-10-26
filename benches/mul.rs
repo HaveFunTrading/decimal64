@@ -9,14 +9,14 @@ fn decimal64_benchmark(c: &mut Criterion) {
         let one = DecimalU64::<U8>::from_str("0.2").unwrap();
         let two = DecimalU64::<U8>::from_str("50000").unwrap();
         b.iter(|| {
-            black_box(one.checked_mul(two).unwrap());
+            black_box(black_box(one).checked_mul(black_box(two)).unwrap());
         })
     });
     group.bench_function("mul", |b| {
         let one = DecimalU64::<U8>::from_str("0.2").unwrap();
         let two = DecimalU64::<U8>::from_str("50000").unwrap();
         b.iter(|| {
-            black_box(one * two);
+            black_box(black_box(one) * black_box(two));
         })
     });
 }
@@ -27,14 +27,14 @@ fn rust_decimal_benchmark(c: &mut Criterion) {
         let one = Decimal::from_str("0.2").unwrap();
         let two = Decimal::from_str("50000").unwrap();
         b.iter(|| {
-            black_box(one.checked_mul(two).unwrap());
+            black_box(black_box(one).checked_mul(black_box(two)).unwrap());
         })
     });
     group.bench_function("mul", |b| {
         let one = Decimal::from_str("0.2").unwrap();
         let two = Decimal::from_str("50000").unwrap();
         b.iter(|| {
-            black_box(one * two);
+            black_box(black_box(one) * black_box(two));
         })
     });
 }
