@@ -31,14 +31,6 @@ let notional = price * quantity;
 assert_eq!(notional.to_string(), "161000.64");
 ```
 
-Add the crate with:
-
-```console
-cargo add decimal64
-```
-
-The minimum supported Rust version is 1.88.
-
 ## Representation and scales
 
 The tuple field contains the raw unscaled integer. For example,
